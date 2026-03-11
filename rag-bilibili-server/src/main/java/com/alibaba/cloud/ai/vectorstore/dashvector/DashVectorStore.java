@@ -8,10 +8,13 @@ import com.aliyun.dashvector.models.requests.DeleteDocRequest;
 import com.aliyun.dashvector.models.requests.QueryDocRequest;
 import com.aliyun.dashvector.models.requests.UpsertDocRequest;
 import com.aliyun.dashvector.models.responses.Response;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
+import org.springframework.ai.vectorstore.filter.Filter;
 import org.springframework.util.CollectionUtils;
 
 import java.util.ArrayList;
@@ -28,6 +31,9 @@ public class DashVectorStore implements VectorStore {
     private final int defaultTopK;
     private final double defaultSimilarityThreshold;
     private final String metric;
+    private final DashVectorFilterExpressionConverter filterExpressionConverter;
+
+    private static final Logger logger = LoggerFactory.getLogger(DashVectorStore.class);
 
     public DashVectorStore(DashVectorCollection collection, String collectionName, EmbeddingModel embeddingModel,
                            int defaultTopK, double defaultSimilarityThreshold, String metric) {
@@ -37,6 +43,7 @@ public class DashVectorStore implements VectorStore {
         this.defaultTopK = defaultTopK;
         this.defaultSimilarityThreshold = defaultSimilarityThreshold;
         this.metric = metric == null ? "cosine" : metric;
+        this.filterExpressionConverter = new DashVectorFilterExpressionConverter();
     }
 
     @Override
@@ -60,7 +67,7 @@ public class DashVectorStore implements VectorStore {
 
             Doc.DocBuilder builder = Doc.builder()
                     .vector(Vector.builder().value(vectorValues).build())
-                    .field("content", document.getContent());
+                    .field("content", document.getText());
 
             if (document.getId() != null && !document.getId().isBlank()) {
                 builder.id(document.getId());
@@ -78,12 +85,27 @@ public class DashVectorStore implements VectorStore {
     }
 
     @Override
-    public Optional<Boolean> delete(List<String> ids) {
+    public void delete(List<String> ids) {
         if (CollectionUtils.isEmpty(ids)) {
-            return Optional.of(Boolean.TRUE);
+            return;
         }
-        Response<List<DocOpResult>> response = collection.delete(DeleteDocRequest.builder().ids(ids).build());
-        return Optional.of(Boolean.TRUE.equals(response.isSuccess()));
+
+        DeleteDocRequest request = DeleteDocRequest.builder().ids(ids).build();
+        Response<?> response = collection.delete(request);
+
+        if (!response.isSuccess()) {
+            throw new RuntimeException("Failed to delete documents from DashVector: " + response.getMessage());
+        }
+
+        logger.debug("Successfully deleted {} documents from DashVector collection '{}'", ids.size(), collectionName);
+    }
+
+    @Override
+    public void delete(Filter.Expression filterExpression) {
+        throw new UnsupportedOperationException(
+                "DashVector does not support filter-based deletion. " +
+                        "Use doDelete(List<String> ids) instead."
+        );
     }
 
     @Override
@@ -101,7 +123,7 @@ public class DashVectorStore implements VectorStore {
                 .includeVector(false);
 
         if (searchRequest.hasFilterExpression()) {
-            requestBuilder.filter(String.valueOf(searchRequest.getFilterExpression()));
+            requestBuilder.filter(filterExpressionConverter.convertExpression(searchRequest.getFilterExpression()));
         }
 
         Response<List<Doc>> response = collection.query(requestBuilder.build());
@@ -123,9 +145,11 @@ public class DashVectorStore implements VectorStore {
 
     @Override
     public List<Document> similaritySearch(String query) {
-        return similaritySearch(SearchRequest.query(query)
-                .withTopK(defaultTopK)
-                .withSimilarityThreshold(defaultSimilarityThreshold));
+        return similaritySearch(SearchRequest.builder()
+                .query(query)
+                .topK(this.defaultTopK)
+                .similarityThreshold(this.defaultSimilarityThreshold)
+                .build());
     }
 
     private boolean matchesThreshold(float rawScore, double threshold) {
@@ -154,9 +178,9 @@ public class DashVectorStore implements VectorStore {
         metadata.put("score", toSimilarity(doc.getScore()));
 
         return Document.builder()
-                .withId(doc.getId())
-                .withContent(contentValue == null ? "" : String.valueOf(contentValue))
-                .withMetadata(metadata)
+                .id(doc.getId())
+                .text(contentValue == null ? "" : String.valueOf(contentValue))
+                .metadata(metadata)
                 .build();
     }
 }

@@ -2,13 +2,30 @@ spring:
   application:
     name: rag-bilibili-server
 
+  autoconfigure:
+    exclude:
+      - org.springframework.ai.model.chat.client.autoconfigure.ChatClientAutoConfiguration
+      - com.alibaba.cloud.ai.autoconfigure.dashscope.DashScopeEmbeddingAutoConfiguration
+
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: jdbc:mysql://localhost:3306/rag_bilibili?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai
+    url: jdbc:mysql://localhost:3306/rag_bilibili?createDatabaseIfNotExist=true&useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai
     username: root
     password: your_password_here
 
+  sql:
+    init:
+      mode: never
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
   ai:
+    model:
+      chat: openai
+      embedding: dashscope
+
     openai:
       api-key: ${OPENAI_API_KEY}
       base-url: ${OPENAI_BASE_URL:https://api.openai.com}
@@ -17,10 +34,14 @@ spring:
           model: gpt-3.5-turbo
           temperature: 0.7
 
-    alibaba:
-      dashscope:
-        api-key: ${DASHSCOPE_API_KEY}
+    dashscope:
+      api-key: ${DASHSCOPE_API_KEY}
+      embedding:
+        options:
+          model: text-embedding-v4
+          dimensions: 1024
 
+    alibaba:
       dashvector:
         api-key: ${DASHVECTOR_API_KEY}
         endpoint: ${DASHVECTOR_ENDPOINT}

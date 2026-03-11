@@ -1,0 +1,567 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RAG-Bilibili 联调页</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: Arial, Helvetica, sans-serif;
+    }
+    body {
+      margin: 0;
+      padding: 20px;
+      background: #f5f7fb;
+      color: #222;
+    }
+    h1 { margin-top: 0; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+      gap: 16px;
+    }
+    .card {
+      background: #fff;
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.06);
+    }
+    .card h2 {
+      margin: 0 0 12px;
+      font-size: 18px;
+    }
+    .row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 8px;
+    }
+    label {
+      display: block;
+      font-size: 13px;
+      color: #555;
+      margin-bottom: 4px;
+    }
+    input, textarea, select, button {
+      font: inherit;
+    }
+    input, textarea, select {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 8px 10px;
+      border: 1px solid #d0d7e2;
+      border-radius: 8px;
+      background: #fff;
+    }
+    textarea {
+      min-height: 90px;
+      resize: vertical;
+    }
+    button {
+      padding: 8px 12px;
+      border: 0;
+      border-radius: 8px;
+      background: #2563eb;
+      color: white;
+      cursor: pointer;
+    }
+    button.secondary { background: #475569; }
+    button.danger { background: #dc2626; }
+    button.ghost {
+      background: #e2e8f0;
+      color: #1e293b;
+    }
+    .list {
+      max-height: 280px;
+      overflow: auto;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 8px;
+      background: #fafafa;
+    }
+    .item {
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      padding: 10px;
+      margin-bottom: 8px;
+      background: white;
+    }
+    .item:last-child { margin-bottom: 0; }
+    .muted { color: #64748b; font-size: 12px; }
+    .mono {
+      font-family: Consolas, monospace;
+      word-break: break-all;
+    }
+    .status {
+      padding: 10px;
+      border-radius: 8px;
+      background: #eff6ff;
+      border: 1px solid #bfdbfe;
+      white-space: pre-wrap;
+      min-height: 44px;
+    }
+    .chat-box {
+      height: 240px;
+      overflow: auto;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      background: #fff;
+      padding: 10px;
+      white-space: pre-wrap;
+    }
+    .pill {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: #e0e7ff;
+      color: #3730a3;
+      font-size: 12px;
+      margin-right: 6px;
+    }
+  </style>
+</head>
+<body>
+  <h1>RAG-Bilibili 简易联调页</h1>
+  <p class="muted">同源访问时直接打开即可：<span class="mono">http://localhost:8080/dev.html</span></p>
+
+  <div class="card" style="margin-bottom: 16px;">
+    <h2>状态</h2>
+    <div id="status" class="status">准备就绪</div>
+  </div>
+
+  <div class="grid">
+    <section class="card">
+      <h2>认证</h2>
+      <div class="row">
+        <div style="flex:1; min-width: 140px;">
+          <label>用户名</label>
+          <input id="authUsername" placeholder="例如：demo" />
+        </div>
+        <div style="flex:1; min-width: 140px;">
+          <label>密码</label>
+          <input id="authPassword" type="password" placeholder="至少 6 位" />
+        </div>
+      </div>
+      <div class="row">
+        <button id="registerBtn">注册</button>
+        <button id="loginBtn">登录</button>
+        <button id="currentBtn" class="ghost">当前用户</button>
+        <button id="logoutBtn" class="secondary">登出</button>
+      </div>
+      <div class="list" id="authOutput"></div>
+    </section>
+
+    <section class="card">
+      <h2>B站导入凭证</h2>
+      <div class="row">
+        <div style="flex:1; min-width: 200px;">
+          <label>SESSDATA</label>
+          <input id="sessdata" placeholder="SESSDATA" />
+        </div>
+      </div>
+      <div class="row">
+        <div style="flex:1; min-width: 160px;">
+          <label>bili_jct</label>
+          <input id="biliJct" placeholder="bili_jct" />
+        </div>
+        <div style="flex:1; min-width: 160px;">
+          <label>buvid3</label>
+          <input id="buvid3" placeholder="buvid3" />
+        </div>
+      </div>
+      <div class="row">
+        <button id="saveCredsBtn">保存到 sessionStorage</button>
+        <button id="loadCredsBtn" class="ghost">读取 sessionStorage</button>
+        <button id="clearCredsBtn" class="danger">清空凭证</button>
+      </div>
+      <div class="muted">按文档，这里只保存在前端的 <span class="mono">sessionStorage</span>。</div>
+    </section>
+
+    <section class="card">
+      <h2>视频导入 / 列表</h2>
+      <div class="row">
+        <div style="flex:1; min-width: 220px;">
+          <label>BV号或视频链接</label>
+          <input id="videoInput" placeholder="BVxxxx 或 https://www.bilibili.com/video/..." />
+        </div>
+      </div>
+      <div class="row">
+        <button id="importVideoBtn">导入视频</button>
+        <button id="listVideosBtn" class="ghost">刷新视频列表</button>
+      </div>
+      <div class="list" id="videoList"></div>
+    </section>
+
+    <section class="card">
+      <h2>会话管理</h2>
+      <div class="row">
+        <div style="flex:1; min-width: 180px;">
+          <label>会话类型</label>
+          <select id="sessionType">
+            <option value="ALL_VIDEOS">ALL_VIDEOS</option>
+            <option value="SINGLE_VIDEO">SINGLE_VIDEO</option>
+          </select>
+        </div>
+        <div style="flex:1; min-width: 180px;">
+          <label>视频ID（单视频时必填）</label>
+          <input id="sessionVideoId" placeholder="从视频列表点“选中”自动填充" />
+        </div>
+      </div>
+      <div class="row">
+        <button id="createSessionBtn">创建会话</button>
+        <button id="listSessionsBtn" class="ghost">刷新会话列表</button>
+      </div>
+      <div class="list" id="sessionList"></div>
+    </section>
+
+    <section class="card" style="grid-column: 1 / -1;">
+      <h2>对话联调</h2>
+      <div class="row">
+        <div style="flex:1; min-width: 180px;">
+          <label>当前会话ID</label>
+          <input id="chatSessionId" placeholder="从会话列表点“选中”自动填充" />
+        </div>
+      </div>
+      <div class="row">
+        <div style="flex:1; min-width: 320px;">
+          <label>消息内容</label>
+          <textarea id="chatInput" placeholder="问点什么，比如：这个视频讲了什么？"></textarea>
+        </div>
+      </div>
+      <div class="row">
+        <button id="sendChatBtn">流式发送</button>
+        <button id="loadMessagesBtn" class="ghost">加载历史消息</button>
+        <button id="clearChatBtn" class="secondary">清空显示</button>
+      </div>
+      <div class="chat-box" id="chatOutput"></div>
+    </section>
+  </div>
+
+  <script>
+    const statusEl = document.getElementById('status');
+    const authOutput = document.getElementById('authOutput');
+    const videoListEl = document.getElementById('videoList');
+    const sessionListEl = document.getElementById('sessionList');
+    const chatOutput = document.getElementById('chatOutput');
+
+    const state = {
+      selectedVideoId: null,
+      selectedSessionId: null
+    };
+
+    function setStatus(message, data) {
+      statusEl.textContent = data ? `${message}\n${JSON.stringify(data, null, 2)}` : message;
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    }
+
+    function appendChat(text) {
+      chatOutput.textContent += text;
+      chatOutput.scrollTop = chatOutput.scrollHeight;
+    }
+
+    function renderJson(container, value) {
+      container.innerHTML = `<div class="item"><pre class="mono">${escapeHtml(JSON.stringify(value, null, 2))}</pre></div>`;
+    }
+
+    async function api(url, options = {}) {
+      const response = await fetch(url, {
+        headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+        ...options
+      });
+
+      const contentType = response.headers.get('content-type') || '';
+      const isJson = contentType.includes('application/json');
+      const payload = isJson ? await response.json() : await response.text();
+
+      if (!response.ok) {
+        throw new Error(typeof payload === 'string' ? payload : JSON.stringify(payload));
+      }
+
+      if (isJson && payload && payload.code !== 200) {
+        throw new Error(payload.message || '请求失败');
+      }
+
+      return isJson ? payload.data : payload;
+    }
+
+    function readCredsFromForm() {
+      return {
+        sessdata: document.getElementById('sessdata').value.trim(),
+        biliJct: document.getElementById('biliJct').value.trim(),
+        buvid3: document.getElementById('buvid3').value.trim()
+      };
+    }
+
+    function fillCreds(creds) {
+      document.getElementById('sessdata').value = creds.sessdata || '';
+      document.getElementById('biliJct').value = creds.biliJct || '';
+      document.getElementById('buvid3').value = creds.buvid3 || '';
+    }
+
+    function saveCreds() {
+      sessionStorage.setItem('bilibiliCreds', JSON.stringify(readCredsFromForm()));
+      setStatus('已保存 B站凭证到 sessionStorage');
+    }
+
+    function loadCreds() {
+      const raw = sessionStorage.getItem('bilibiliCreds');
+      if (!raw) {
+        setStatus('sessionStorage 中没有凭证');
+        return;
+      }
+      fillCreds(JSON.parse(raw));
+      setStatus('已从 sessionStorage 读取凭证');
+    }
+
+    function clearCreds() {
+      sessionStorage.removeItem('bilibiliCreds');
+      fillCreds({});
+      setStatus('已清空前端凭证');
+    }
+
+    async function register() {
+      const data = await api('/api/auth/register', {
+        method: 'POST',
+        body: JSON.stringify({
+          username: document.getElementById('authUsername').value.trim(),
+          password: document.getElementById('authPassword').value.trim()
+        })
+      });
+      renderJson(authOutput, data);
+      setStatus('注册成功', data);
+    }
+
+    async function login() {
+      const data = await api('/api/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({
+          username: document.getElementById('authUsername').value.trim(),
+          password: document.getElementById('authPassword').value.trim()
+        })
+      });
+      renderJson(authOutput, data);
+      setStatus('登录成功，Session 已建立', data);
+    }
+
+    async function currentUser() {
+      const data = await api('/api/auth/current');
+      renderJson(authOutput, data);
+      setStatus('已获取当前用户', data);
+    }
+
+    async function logout() {
+      await api('/api/auth/logout', { method: 'POST' });
+      authOutput.innerHTML = '';
+      setStatus('已登出，Session 已失效');
+    }
+
+    async function importVideo() {
+      const creds = readCredsFromForm();
+      const data = await api('/api/videos', {
+        method: 'POST',
+        body: JSON.stringify({
+          bvidOrUrl: document.getElementById('videoInput').value.trim(),
+          sessdata: creds.sessdata,
+          biliJct: creds.biliJct,
+          buvid3: creds.buvid3
+        })
+      });
+      setStatus('视频导入完成', data);
+      await listVideos();
+    }
+
+    async function listVideos() {
+      const data = await api('/api/videos');
+      if (!Array.isArray(data) || data.length === 0) {
+        videoListEl.innerHTML = '<div class="item muted">暂无视频</div>';
+        return;
+      }
+      videoListEl.innerHTML = data.map(video => `
+        <div class="item">
+          <div><span class="pill">ID ${escapeHtml(video.id)}</span><span class="pill">${escapeHtml(video.status)}</span></div>
+          <div><strong>${escapeHtml(video.title || '(无标题)')}</strong></div>
+          <div class="muted">BVID: ${escapeHtml(video.bvid || '')}</div>
+          <div class="muted">Chunks: ${escapeHtml(video.chunkCount ?? '')}</div>
+          <div class="row" style="margin-top:8px;">
+            <button onclick="selectVideo(${video.id})" class="ghost">选中</button>
+            <button onclick="createSingleVideoSession(${video.id})">建单视频会话</button>
+            <button onclick="deleteVideo(${video.id})" class="danger">删除</button>
+          </div>
+        </div>
+      `).join('');
+      setStatus(`已加载 ${data.length} 个视频`);
+    }
+
+    window.selectVideo = function(id) {
+      state.selectedVideoId = id;
+      document.getElementById('sessionVideoId').value = id;
+      setStatus(`已选中视频 ID=${id}`);
+    };
+
+    window.deleteVideo = async function(id) {
+      await api(`/api/videos/${id}`, { method: 'DELETE' });
+      setStatus(`已删除视频 ID=${id}`);
+      await listVideos();
+      await listSessions();
+    };
+
+    async function createSession() {
+      const sessionType = document.getElementById('sessionType').value;
+      const rawVideoId = document.getElementById('sessionVideoId').value.trim();
+      const payload = { sessionType };
+      if (sessionType === 'SINGLE_VIDEO') {
+        payload.videoId = Number(rawVideoId);
+      }
+      const data = await api('/api/sessions', {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      });
+      setStatus('会话创建成功', data);
+      await listSessions();
+      if (data?.id) {
+        selectSession(data.id);
+      }
+    }
+
+    window.createSingleVideoSession = async function(videoId) {
+      document.getElementById('sessionType').value = 'SINGLE_VIDEO';
+      document.getElementById('sessionVideoId').value = videoId;
+      await createSession();
+    };
+
+    async function listSessions() {
+      const data = await api('/api/sessions');
+      if (!Array.isArray(data) || data.length === 0) {
+        sessionListEl.innerHTML = '<div class="item muted">暂无会话</div>';
+        return;
+      }
+      sessionListEl.innerHTML = data.map(session => `
+        <div class="item">
+          <div><span class="pill">ID ${escapeHtml(session.id)}</span><span class="pill">${escapeHtml(session.sessionType)}</span></div>
+          <div>${escapeHtml(session.videoTitle || '(全部视频会话)')}</div>
+          <div class="row" style="margin-top:8px;">
+            <button onclick="selectSession(${session.id})" class="ghost">选中</button>
+            <button onclick="loadMessages(${session.id})">看消息</button>
+            <button onclick="deleteSession(${session.id})" class="danger">删除</button>
+          </div>
+        </div>
+      `).join('');
+      setStatus(`已加载 ${data.length} 个会话`);
+    }
+
+    window.selectSession = function(id) {
+      state.selectedSessionId = id;
+      document.getElementById('chatSessionId').value = id;
+      setStatus(`已选中会话 ID=${id}`);
+    };
+
+    window.deleteSession = async function(id) {
+      await api(`/api/sessions/${id}`, { method: 'DELETE' });
+      setStatus(`已删除会话 ID=${id}`);
+      await listSessions();
+      if (String(state.selectedSessionId) === String(id)) {
+        state.selectedSessionId = null;
+        document.getElementById('chatSessionId').value = '';
+      }
+    };
+
+    async function loadMessages(sessionIdArg) {
+      const sessionId = sessionIdArg || document.getElementById('chatSessionId').value.trim();
+      const data = await api(`/api/sessions/${sessionId}/messages`);
+      chatOutput.textContent = '';
+      if (!Array.isArray(data) || data.length === 0) {
+        appendChat('暂无消息');
+        return;
+      }
+      for (const item of data) {
+        appendChat(`[${item.role}] ${item.content}\n\n`);
+      }
+      setStatus(`已加载会话 ${sessionId} 的消息`, { count: data.length });
+    }
+    window.loadMessages = loadMessages;
+
+    async function streamChat() {
+      const sessionId = document.getElementById('chatSessionId').value.trim();
+      const content = document.getElementById('chatInput').value.trim();
+      if (!sessionId || !content) {
+        throw new Error('请先填写会话ID和消息内容');
+      }
+
+      appendChat(`\n[USER] ${content}\n\n[ASSISTANT] `);
+
+      const response = await fetch(`/api/sessions/${sessionId}/messages/stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content })
+      });
+
+      if (!response.ok || !response.body) {
+        throw new Error(`流式请求失败: HTTP ${response.status}`);
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) {
+          break;
+        }
+        buffer += decoder.decode(value, { stream: true });
+
+        let parts = buffer.split('\n\n');
+        buffer = parts.pop();
+
+        for (const part of parts) {
+          const lines = part.split('\n');
+          for (const line of lines) {
+            if (line.startsWith('data:')) {
+              appendChat(line.slice(5).trimStart());
+            }
+          }
+        }
+      }
+
+      appendChat('\n\n');
+      setStatus(`会话 ${sessionId} 流式对话完成`);
+      await loadMessages(sessionId);
+    }
+
+    document.getElementById('registerBtn').addEventListener('click', () => handle(register));
+    document.getElementById('loginBtn').addEventListener('click', () => handle(login));
+    document.getElementById('currentBtn').addEventListener('click', () => handle(currentUser));
+    document.getElementById('logoutBtn').addEventListener('click', () => handle(logout));
+    document.getElementById('saveCredsBtn').addEventListener('click', saveCreds);
+    document.getElementById('loadCredsBtn').addEventListener('click', loadCreds);
+    document.getElementById('clearCredsBtn').addEventListener('click', clearCreds);
+    document.getElementById('importVideoBtn').addEventListener('click', () => handle(importVideo));
+    document.getElementById('listVideosBtn').addEventListener('click', () => handle(listVideos));
+    document.getElementById('createSessionBtn').addEventListener('click', () => handle(createSession));
+    document.getElementById('listSessionsBtn').addEventListener('click', () => handle(listSessions));
+    document.getElementById('sendChatBtn').addEventListener('click', () => handle(streamChat));
+    document.getElementById('loadMessagesBtn').addEventListener('click', () => handle(loadMessages));
+    document.getElementById('clearChatBtn').addEventListener('click', () => { chatOutput.textContent = ''; });
+
+    async function handle(fn) {
+      try {
+        await fn();
+      } catch (error) {
+        console.error(error);
+        setStatus(`发生错误: ${error.message || error}`);
+      }
+    }
+
+    loadCreds();
+  </script>
+</body>
+</html>

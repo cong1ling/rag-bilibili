@@ -70,16 +70,10 @@ public class VideoServiceImpl implements VideoService {
             throw new BusinessException(ErrorCode.VIDEO_ALREADY_EXISTS);
         }
 
-        // 3. 创建视频记录（状态：IMPORTING）
-        Video video = new Video();
-        video.setUserId(userId);
-        video.setBvid(bvid);
-        video.setStatus(VideoStatus.IMPORTING.getCode());
-        video.setImportTime(LocalDateTime.now());
-        videoMapper.insert(video);
+        Video video = null;
 
         try {
-            // 4. 使用 BilibiliDocumentReader 读取视频内容
+            // 3. 使用 BilibiliDocumentReader 读取视频内容
             BilibiliCredentials credentials = BilibiliCredentials.builder()
                     .sessdata(request.getSessdata())
                     .biliJct(request.getBiliJct())
@@ -97,10 +91,15 @@ public class VideoServiceImpl implements VideoService {
             String videoTitle = (String) document.getMetadata().get("title");
             String videoDescription = (String) document.getMetadata().get("description");
 
-            // 更新视频信息
+            // 4. 创建视频记录（状态：IMPORTING）
+            video = new Video();
+            video.setUserId(userId);
+            video.setBvid(bvid);
             video.setTitle(videoTitle);
             video.setDescription(videoDescription);
-            videoMapper.update(video);
+            video.setStatus(VideoStatus.IMPORTING.getCode());
+            video.setImportTime(LocalDateTime.now());
+            videoMapper.insert(video);
 
             // 5. 文本切分
             List<Document> splitDocuments = tokenTextSplitter.apply(documents);
@@ -116,9 +115,12 @@ public class VideoServiceImpl implements VideoService {
                 String vectorId = VectorIDGenerator.generate(userId, bvid, i);
 
                 Document indexedDocument = Document.builder()
-                        .withId(vectorId)
-                        .withContent(doc.getContent())
-                        .withMetadata(new HashMap<>(doc.getMetadata()))
+                        .id(vectorId)
+                        .text(doc.getText())
+                        .metadata(new HashMap<>(doc.getMetadata()))
+                        .metadata("userId", userId)
+                        .metadata("bvid", bvid)
+                        .metadata("chunkIndex", i)
                         .build();
                 indexedDocuments.add(indexedDocument);
 
@@ -130,7 +132,7 @@ public class VideoServiceImpl implements VideoService {
                 chunk.setTitle(videoTitle);
                 chunk.setChunkIndex(i);
                 chunk.setTotalChunks(totalChunks);
-                chunk.setChunkText(indexedDocument.getContent());
+                chunk.setChunkText(indexedDocument.getText());
                 chunk.setCreateTime(LocalDateTime.now());
                 chunks.add(chunk);
             }
@@ -171,10 +173,12 @@ public class VideoServiceImpl implements VideoService {
         } catch (Exception e) {
             log.error("视频导入失败: userId={}, bvid={}", userId, bvid, e);
 
-            // 更新视频状态为失败
-            video.setStatus(VideoStatus.FAILED.getCode());
-            video.setFailReason(e.getMessage());
-            videoMapper.update(video);
+            if (video != null) {
+                // 更新视频状态为失败
+                video.setStatus(VideoStatus.FAILED.getCode());
+                video.setFailReason(e.getMessage());
+                videoMapper.update(video);
+            }
 
             throw new BusinessException(ErrorCode.VIDEO_IMPORT_FAILED);
         }

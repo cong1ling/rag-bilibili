@@ -5,10 +5,12 @@ import com.aliyun.dashvector.DashVectorClient;
 import com.aliyun.dashvector.DashVectorCollection;
 import com.aliyun.dashvector.common.DashVectorException;
 import org.springframework.ai.embedding.EmbeddingModel;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.util.Assert;
+import org.springframework.util.StringUtils;
 
 @Configuration
 @EnableConfigurationProperties(DashVectorProperties.class)
@@ -27,7 +29,7 @@ public class DashVectorConfig {
     }
 
     @Bean
-    public DashVectorStore dashVectorStore(DashVectorCollection collection, EmbeddingModel embeddingModel,
+    public DashVectorStore dashVectorStore(DashVectorCollection collection, @Qualifier("dashscopeEmbeddingModel") EmbeddingModel embeddingModel,
                                            DashVectorProperties properties) {
         return new DashVectorStore(
                 collection,
@@ -35,7 +37,7 @@ public class DashVectorConfig {
                 embeddingModel,
                 properties.getDefaultTopK() == null ? 10 : properties.getDefaultTopK(),
                 properties.getSimilarityThreshold() == null ? 0.0 : properties.getSimilarityThreshold(),
-                properties.getMetric()
+                StringUtils.hasText(properties.getMetric()) ? properties.getMetric() : "cosine"
         );
     }
 }

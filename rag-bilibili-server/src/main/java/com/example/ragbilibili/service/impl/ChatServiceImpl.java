@@ -18,6 +18,7 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.SearchRequest;
+import org.springframework.ai.vectorstore.filter.FilterExpressionBuilder;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -99,7 +100,7 @@ public class ChatServiceImpl implements ChatService {
                 // 11. 流式发送
                 responseFlux.subscribe(
                         response -> {
-                            String chunk = response.getResult().getOutput().getContent();
+                            String chunk = response.getResult().getOutput().getText();
                             if (chunk != null && !chunk.isEmpty()) {
                                 fullResponse.append(chunk);
                                 try {
@@ -144,41 +145,36 @@ public class ChatServiceImpl implements ChatService {
      * 检索相关文档
      */
     private List<Document> retrieveRelevantDocuments(Session session, String query, Long userId) {
+        FilterExpressionBuilder filterExpressionBuilder = new FilterExpressionBuilder();
+
         if (session.getSessionType().equals(SessionType.SINGLE_VIDEO.getCode())) {
-            // 单视频对话：使用过滤条件
-            // DashVector 支持通过 metadata 过滤，但这里我们使用向量ID前缀匹配
-            // 向量ID格式：userId:bvid:chunkIndex
-            // 我们需要搜索所有 userId:bvid:* 的向量
-
-            // 注意：DashVectorStore 的 similaritySearch 方法可能不直接支持前缀过滤
-            // V1 版本简化处理：先检索 TOP_K，然后在应用层过滤
-            List<Document> allDocs = dashVectorStore.similaritySearch(
-                    SearchRequest.query(query).withTopK(TOP_K * 2).withSimilarityThresholdAll()
-            );
-
             Video video = videoMapper.selectById(session.getVideoId());
             if (video == null) {
                 return List.of();
             }
 
-            // 过滤出属于当前视频的文档
-            String videoPrefix = userId + ":" + video.getBvid() + ":";
-            return allDocs.stream()
-                    .filter(doc -> doc.getId() != null && doc.getId().startsWith(videoPrefix))
-                    .limit(TOP_K)
-                    .collect(Collectors.toList());
-        } else {
-            // 全部视频对话：检索用户所有视频
-            List<Document> allDocs = dashVectorStore.similaritySearch(
-                    SearchRequest.query(query).withTopK(TOP_K * 2).withSimilarityThresholdAll()
+            return dashVectorStore.similaritySearch(
+                    SearchRequest.builder()
+                            .query(query)
+                            .topK(TOP_K)
+                            .similarityThreshold(0.0)
+                            .filterExpression(
+                                    filterExpressionBuilder.and(
+                                            filterExpressionBuilder.eq("userId", userId),
+                                            filterExpressionBuilder.eq("bvid", video.getBvid())
+                                    ).build()
+                            )
+                            .build()
             );
-
-            // 过滤出属于当前用户的文档
-            String userPrefix = userId + ":";
-            return allDocs.stream()
-                    .filter(doc -> doc.getId() != null && doc.getId().startsWith(userPrefix))
-                    .limit(TOP_K)
-                    .collect(Collectors.toList());
+        } else {
+            return dashVectorStore.similaritySearch(
+                    SearchRequest.builder()
+                            .query(query)
+                            .topK(TOP_K)
+                            .similarityThreshold(0.0)
+                            .filterExpression(filterExpressionBuilder.eq("userId", userId).build())
+                            .build()
+            );
         }
     }
 
@@ -196,7 +192,7 @@ public class ChatServiceImpl implements ChatService {
         for (int i = 0; i < documents.size(); i++) {
             Document doc = documents.get(i);
             context.append(String.format("[片段 %d]\n", i + 1));
-            context.append(doc.getContent());
+            context.append(doc.getText());
             context.append("\n\n");
         }
 

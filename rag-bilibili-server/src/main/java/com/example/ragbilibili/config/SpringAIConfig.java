@@ -1,5 +1,7 @@
 package com.example.ragbilibili.config;
 
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.transformer.splitter.TokenTextSplitter;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -22,5 +24,13 @@ public class SpringAIConfig {
                 10000,  // maxNumChunks
                 true    // keepSeparator
         );
+    }
+
+    /**
+     * 配置 ChatClient.Builder
+     */
+    @Bean
+    public ChatClient.Builder chatClientBuilder(ChatModel chatModel) {
+        return ChatClient.builder(chatModel);
     }
 }
