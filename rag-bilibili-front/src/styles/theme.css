@@ -1,29 +1,29 @@
 @import url("https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap");
 
 :root {
-  --rb-bg: #f6f3ee;
+  --rb-bg: #f3f8ff;
   --rb-bg-strong: #ffffff;
-  --rb-panel: rgba(255, 255, 255, 0.84);
+  --rb-panel: rgba(255, 255, 255, 0.88);
   --rb-panel-strong: #ffffff;
-  --rb-border: rgba(23, 23, 23, 0.08);
-  --rb-text: #171717;
-  --rb-text-soft: #525252;
+  --rb-border: rgba(37, 99, 235, 0.14);
+  --rb-text: #10213a;
+  --rb-text-soft: #53657f;
   --rb-accent: #2563eb;
-  --rb-accent-strong: #1d4ed8;
-  --rb-accent-soft: rgba(37, 99, 235, 0.1);
-  --rb-gold: #d4af37;
-  --rb-gold-soft: rgba(212, 175, 55, 0.16);
-  --rb-black: #171717;
+  --rb-accent-strong: #1e40af;
+  --rb-accent-soft: rgba(37, 99, 235, 0.12);
+  --rb-gold: #3b82f6;
+  --rb-gold-soft: rgba(59, 130, 246, 0.14);
+  --rb-black: #10213a;
   --rb-success: #0f766e;
   --rb-danger: #b91c1c;
   --rb-warning: #b7791f;
-  --rb-shadow: 0 24px 60px rgba(23, 23, 23, 0.1);
+  --rb-shadow: 0 24px 60px rgba(30, 64, 175, 0.12);
   --rb-radius-xl: 28px;
   --rb-radius-lg: 22px;
   --rb-radius-md: 18px;
   --rb-radius-sm: 14px;
   --rb-sidebar: 280px;
-  --el-color-primary: #171717;
+  --el-color-primary: #2563eb;
   --el-color-success: #0f766e;
   --el-color-warning: #b7791f;
   --el-color-danger: #b91c1c;
@@ -46,9 +46,9 @@ body {
   font-family: "Plus Jakarta Sans", "PingFang SC", "Microsoft YaHei", sans-serif;
   color: var(--rb-text);
   background:
-    radial-gradient(circle at top left, rgba(37, 99, 235, 0.12), transparent 24%),
-    radial-gradient(circle at top right, rgba(212, 175, 55, 0.11), transparent 28%),
-    linear-gradient(180deg, #fefefe 0%, #f6f8fc 38%, #eef1f6 100%);
+    radial-gradient(circle at top left, rgba(37, 99, 235, 0.18), transparent 24%),
+    radial-gradient(circle at top right, rgba(96, 165, 250, 0.14), transparent 28%),
+    linear-gradient(180deg, #fbfdff 0%, #f3f8ff 38%, #e8f0ff 100%);
 }
 
 body::before {
@@ -116,6 +116,17 @@ textarea {
   border: 1px solid var(--rb-border);
   border-radius: var(--rb-radius-lg);
   background: var(--rb-panel-strong);
+}
+
+.el-button--primary {
+  border-color: transparent;
+  background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%);
+  box-shadow: 0 16px 32px rgba(37, 99, 235, 0.24);
+}
+
+.el-button--primary:hover,
+.el-button--primary:focus-visible {
+  background: linear-gradient(135deg, #1d4ed8 0%, #1e3a8a 100%);
 }
 
 .page-header {
@@ -273,6 +284,11 @@ textarea {
 .auth-hero,
 .auth-panel {
   padding: 34px;
+}
+
+.auth-panel {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(241, 247, 255, 0.96) 100%);
 }
 
 .auth-hero h1 {
@@ -1004,8 +1020,78 @@ textarea {
 
 .landing-login-panel .el-button--primary {
   border: none;
-  background: linear-gradient(135deg, var(--rb-accent) 0%, #0f172a 100%);
-  box-shadow: 0 16px 34px rgba(37, 99, 235, 0.22);
+  background: linear-gradient(135deg, var(--rb-accent) 0%, #1e40af 100%);
+  box-shadow: 0 18px 38px rgba(37, 99, 235, 0.24);
+}
+
+.landing-auth-actions {
+  display: grid;
+  gap: 14px;
+  margin-top: 8px;
+  margin-bottom: 10px;
+}
+
+.landing-login-submit {
+  min-height: 52px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.landing-register-entry {
+  display: grid;
+  gap: 6px;
+  padding: 18px 20px;
+  border: 1px solid rgba(37, 99, 235, 0.18);
+  border-radius: 20px;
+  background: linear-gradient(180deg, rgba(239, 246, 255, 0.96) 0%, rgba(255, 255, 255, 0.98) 100%);
+  box-shadow: 0 14px 30px rgba(37, 99, 235, 0.1);
+  transition:
+    transform 180ms ease,
+    border-color 180ms ease,
+    box-shadow 180ms ease;
+}
+
+.landing-register-entry:hover {
+  transform: translateY(-2px);
+  border-color: rgba(37, 99, 235, 0.34);
+  box-shadow: 0 20px 40px rgba(37, 99, 235, 0.14);
+}
+
+.landing-register-entry-label {
+  color: var(--rb-accent-strong);
+  font-family: "Fira Code", monospace;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.landing-register-entry strong {
+  color: var(--rb-text);
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+.landing-register-entry-meta {
+  color: var(--rb-text-soft);
+  line-height: 1.7;
+}
+
+.landing-register-entry-login {
+  background: linear-gradient(180deg, rgba(219, 234, 254, 0.94) 0%, rgba(255, 255, 255, 0.98) 100%);
+}
+
+.landing-secondary-button {
+  border-color: rgba(37, 99, 235, 0.16);
+  color: var(--rb-accent-strong);
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.landing-secondary-button:hover,
+.landing-secondary-button:focus-visible {
+  border-color: rgba(37, 99, 235, 0.3);
+  color: var(--rb-accent-strong);
+  background: rgba(239, 246, 255, 0.96);
 }
 
 .landing-login-footer {
@@ -1096,7 +1182,7 @@ textarea {
 }
 
 .nav-link.router-link-active {
-  background: rgba(23, 23, 23, 0.9);
+  background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%);
   color: #fff;
 }
 

@@ -45,7 +45,7 @@
               <StatusPill :label="roleMeta(message.role).label" :tone="roleMeta(message.role).tone" />
               <span class="muted">{{ formatDateTime(message.createTime) }}</span>
             </div>
-            <p>{{ message.content || "..." }}</p>
+            <p class="message-content">{{ message.content || "..." }}</p>
           </article>
         </div>
 
@@ -146,11 +146,15 @@ const streaming = ref(false);
 const inlineError = ref("");
 const draft = ref("");
 let abortController = null;
+let streamFrameId = 0;
+let pendingAssistantMessage = null;
+let pendingAssistantDelta = "";
 
 loadSession();
 
 onBeforeUnmount(() => {
   abortStream();
+  clearPendingStreamFrame();
 });
 
 function roleMeta(role) {
@@ -196,7 +200,41 @@ function abortStream() {
     abortController.abort();
     abortController = null;
   }
+  flushPendingAssistantContent();
   streaming.value = false;
+}
+
+function clearPendingStreamFrame() {
+  if (!streamFrameId) {
+    return;
+  }
+  window.cancelAnimationFrame(streamFrameId);
+  streamFrameId = 0;
+}
+
+function flushPendingAssistantContent() {
+  clearPendingStreamFrame();
+  if (!pendingAssistantMessage || !pendingAssistantDelta) {
+    pendingAssistantDelta = "";
+    return;
+  }
+
+  pendingAssistantMessage.content += pendingAssistantDelta;
+  pendingAssistantDelta = "";
+}
+
+function scheduleAssistantContent(message, delta) {
+  pendingAssistantMessage = message;
+  pendingAssistantDelta += delta;
+
+  if (streamFrameId) {
+    return;
+  }
+
+  streamFrameId = window.requestAnimationFrame(() => {
+    streamFrameId = 0;
+    flushPendingAssistantContent();
+  });
 }
 
 async function sendMessage() {
@@ -235,16 +273,20 @@ async function sendMessage() {
       {
         start(payload) {
           hasStarted = true;
-          userMessage.id = payload.userMessageId;
+          userMessage.id = payload.userMessageId || userMessage.id;
           draft.value = "";
           logger.info("chat", "收到 start 事件", payload);
         },
         content(payload) {
-          assistantMessage.content += payload.delta || "";
+          if (!payload.delta) {
+            return;
+          }
+          scheduleAssistantContent(assistantMessage, payload.delta);
         },
         end(payload) {
+          flushPendingAssistantContent();
           hasCompleted = true;
-          assistantMessage.id = payload.assistantMessageId;
+          assistantMessage.id = payload.assistantMessageId || assistantMessage.id;
           assistantMessage.content = payload.fullContent || assistantMessage.content;
           logger.info("chat", "收到 end 事件", payload);
         },
@@ -254,8 +296,11 @@ async function sendMessage() {
       },
       abortController.signal
     );
+    const latestMessages = await messagesApi.list(sessionId);
+    messages.value = latestMessages.map((item) => withLocalKey(item));
     ElMessage.success("回答生成完成");
   } catch (error) {
+    flushPendingAssistantContent();
     if (error?.name === "AbortError") {
       if (!hasStarted) {
         messages.value = messages.value.filter(
@@ -280,8 +325,18 @@ async function sendMessage() {
       }
     }
   } finally {
+    pendingAssistantMessage = null;
+    pendingAssistantDelta = "";
+    clearPendingStreamFrame();
     streaming.value = false;
     abortController = null;
   }
 }
 </script>
+
+<style scoped>
+.message-content {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+</style>

@@ -49,10 +49,24 @@
             placeholder="再次输入密码"
           />
         </el-form-item>
+        <div class="landing-auth-actions">
+          <el-button
+            type="primary"
+            class="landing-login-submit full-width"
+            :loading="authStore.loading"
+            @click="handleSubmit"
+          >
+            立即注册
+          </el-button>
+          <RouterLink to="/login" class="landing-register-entry landing-register-entry-login">
+            <span class="landing-register-entry-label">已经有账号？</span>
+            <strong>直接返回登录，进入工作台</strong>
+            <span class="landing-register-entry-meta">已有账号无需重复注册，登录后可继续已有数据和会话</span>
+          </RouterLink>
+        </div>
         <div class="toolbar">
-          <el-button type="primary" :loading="authStore.loading" @click="handleSubmit">注册</el-button>
           <RouterLink to="/login">
-            <el-button>返回登录</el-button>
+            <el-button class="landing-secondary-button">返回登录</el-button>
           </RouterLink>
         </div>
       </el-form>

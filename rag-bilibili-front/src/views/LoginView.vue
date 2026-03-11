@@ -178,10 +178,24 @@
           <el-form-item label="密码" prop="password">
             <el-input v-model.trim="form.password" type="password" show-password placeholder="请输入密码" />
           </el-form-item>
+          <div class="landing-auth-actions">
+            <el-button
+              type="primary"
+              class="landing-login-submit full-width"
+              :loading="authStore.loading"
+              @click="handleSubmit"
+            >
+              立即登录
+            </el-button>
+            <RouterLink to="/register" class="landing-register-entry">
+              <span class="landing-register-entry-label">还没有账号？</span>
+              <strong>去注册，开始建立自己的视频知识库</strong>
+              <span class="landing-register-entry-meta">注册后即可导入视频、创建会话并继续追问</span>
+            </RouterLink>
+          </div>
           <div class="toolbar">
-            <el-button type="primary" :loading="authStore.loading" @click="handleSubmit">登录</el-button>
             <RouterLink to="/register">
-              <el-button>创建账号</el-button>
+              <el-button class="landing-secondary-button">创建账号</el-button>
             </RouterLink>
           </div>
         </el-form>
