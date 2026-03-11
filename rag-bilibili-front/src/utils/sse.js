@@ -24,11 +24,11 @@ function decodeSseEvent(rawEvent) {
     return {
       event: payload.type || explicitEvent,
       payload,
+      raw: dataText,
     };
   } catch (error) {
-    logger.error("sse", "SSE 数据解析失败", {
-      rawEvent,
-      error,
+    logger.info("sse", "SSE 数据按纯文本处理", {
+      event: explicitEvent,
     });
     return {
       event: explicitEvent,
@@ -36,6 +36,7 @@ function decodeSseEvent(rawEvent) {
         type: explicitEvent,
         raw: dataText,
       },
+      raw: dataText,
     };
   }
 }
@@ -52,6 +53,21 @@ export async function consumeSseStream(response, handlers = {}) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let started = false;
+  let fullText = "";
+
+  const emitStart = async () => {
+    if (started) {
+      return;
+    }
+    started = true;
+    if (handlers.start) {
+      await handlers.start({
+        type: "start",
+        synthetic: true,
+      });
+    }
+  };
 
   while (true) {
     const { done, value } = await reader.read();
@@ -69,6 +85,21 @@ export async function consumeSseStream(response, handlers = {}) {
         continue;
       }
 
+      await emitStart();
+
+      if (parsed.event === "message") {
+        const delta = parsed.payload?.delta ?? parsed.raw ?? parsed.payload?.raw ?? "";
+        fullText += delta;
+        if (handlers.content) {
+          await handlers.content({
+            ...parsed.payload,
+            type: "content",
+            delta,
+          });
+          continue;
+        }
+      }
+
       const handler = handlers[parsed.event] || handlers.message;
       if (handler) {
         await handler(parsed.payload);
@@ -79,10 +110,37 @@ export async function consumeSseStream(response, handlers = {}) {
   if (buffer.trim()) {
     const parsed = decodeSseEvent(buffer.trim());
     if (parsed) {
-      const handler = handlers[parsed.event] || handlers.message;
-      if (handler) {
-        await handler(parsed.payload);
+      await emitStart();
+
+      if (parsed.event === "message") {
+        const delta = parsed.payload?.delta ?? parsed.raw ?? parsed.payload?.raw ?? "";
+        fullText += delta;
+        if (handlers.content) {
+          await handlers.content({
+            ...parsed.payload,
+            type: "content",
+            delta,
+          });
+        } else {
+          const handler = handlers[parsed.event] || handlers.message;
+          if (handler) {
+            await handler(parsed.payload);
+          }
+        }
+      } else {
+        const handler = handlers[parsed.event] || handlers.message;
+        if (handler) {
+          await handler(parsed.payload);
+        }
       }
     }
+  }
+
+  if (started && handlers.end) {
+    await handlers.end({
+      type: "end",
+      synthetic: true,
+      fullContent: fullText,
+    });
   }
 }
