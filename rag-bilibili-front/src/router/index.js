@@ -6,7 +6,12 @@ import { useAuthStore } from "../stores/auth";
 import { logger } from "../utils/logger";
 
 const routes = [
-  { path: "/", redirect: "/videos" },
+  {
+    path: "/",
+    name: "home",
+    component: () => import("../views/HomeView.vue"),
+    meta: { title: "首页" },
+  },
   {
     path: "/login",
     name: "login",
@@ -77,6 +82,10 @@ router.beforeEach(async (to) => {
   }
 
   if (to.meta.guestOnly && authStore.isAuthenticated) {
+    return { name: "videos" };
+  }
+
+  if (to.name === "home" && authStore.isAuthenticated) {
     return { name: "videos" };
   }
 

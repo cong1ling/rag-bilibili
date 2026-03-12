@@ -12,13 +12,14 @@ import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.Arrays;
 import java.util.List;
 
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
@@ -40,15 +41,12 @@ class MessageControllerTest {
 
     @Test
     void testStreamMessage() throws Exception {
-        // 准备测试数据
         SendMessageRequest request = new SendMessageRequest();
         request.setContent("什么是 Spring Boot？");
 
-        // Mock Service 行为 - 返回一个 SseEmitter
         SseEmitter emitter = new SseEmitter();
         when(chatService.streamMessage(eq(1L), eq("什么是 Spring Boot？"), eq(1L))).thenReturn(emitter);
 
-        // 执行测试
         MockHttpSession session = new MockHttpSession();
         session.setAttribute("userId", 1L);
 
@@ -56,9 +54,29 @@ class MessageControllerTest {
                         .session(session)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isOk());
+                .andExpect(status().isOk())
+                .andExpect(request().asyncStarted());
 
-        // 注意：SSE 流式响应的完整测试比较复杂，这里只验证接口能正常调用
+        verify(chatService).streamMessage(1L, "什么是 Spring Boot？", 1L);
+    }
+
+    @Test
+    void testStreamMessageShouldRejectBlankContent() throws Exception {
+        SendMessageRequest request = new SendMessageRequest();
+        request.setContent(" ");
+
+        MockHttpSession session = new MockHttpSession();
+        session.setAttribute("userId", 1L);
+
+        mockMvc.perform(post("/api/sessions/1/messages/stream")
+                        .session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(400))
+                .andExpect(jsonPath("$.message").value("消息内容不能为空"));
+
+        verifyNoInteractions(chatService);
     }
 
     @Test

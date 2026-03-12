@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd rag-bilibili-front:*)",
+      "Bash(cd \"D:\\\\vibe-coding\\\\rag-bilibili\\\\rag-bilibili-front\" && npm install dompurify)"
+    ]
+  }
+}

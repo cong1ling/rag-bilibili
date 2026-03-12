@@ -1,81 +1,102 @@
 <template>
-  <div class="auth-shell">
-    <section class="surface auth-hero">
-      <div class="eyebrow">RAG-BILIBILI / REGISTER</div>
-      <h1>建立你的私有视频知识工作台。</h1>
-      <p>
-        用户注册后将拥有独立数据空间，视频、向量映射、会话与消息都必须按用户维度隔离。
-        当前页面只提交文档要求的最小注册字段，并对输入不合法时给出明确提示。
-      </p>
+  <div class="auth-page">
+    <div class="auth-background">
+      <div class="gradient-orb orb-1"></div>
+      <div class="gradient-orb orb-2"></div>
+    </div>
 
-      <div class="stats-grid top-gap">
-        <div class="surface-strong stat-card">
-          <div class="eyebrow">01</div>
-          <strong>用户隔离</strong>
-          <p>所有后续查询、删除和问答都带用户维度。</p>
+    <div class="auth-container">
+      <div class="auth-card">
+        <div class="auth-header">
+          <RouterLink to="/" class="auth-logo">
+            <span class="logo-icon">RB</span>
+            <span class="logo-text">RAG Bilibili</span>
+          </RouterLink>
+          <h1 class="auth-title">创建账号</h1>
+          <p class="auth-description">开始构建你的视频知识库</p>
         </div>
-        <div class="surface-strong stat-card">
-          <div class="eyebrow">02</div>
-          <strong>清晰报错</strong>
-          <p>对 `USER_ALREADY_EXISTS`、参数错误等场景显示可理解信息。</p>
-        </div>
-        <div class="surface-strong stat-card">
-          <div class="eyebrow">03</div>
-          <strong>快速进入</strong>
-          <p>注册成功后直接跳转登录页，避免身份状态混乱。</p>
-        </div>
-      </div>
-    </section>
 
-    <section class="surface auth-panel">
-      <div class="eyebrow">Create Account</div>
-      <h2>注册</h2>
-      <p class="muted">用户名长度需在 3-50 之间，密码长度需在 6-20 之间。</p>
+        <el-alert v-if="inlineError" class="auth-alert" type="error" :title="inlineError" show-icon />
 
-      <el-alert v-if="inlineError" class="alert-inline" type="error" :title="inlineError" show-icon />
+        <el-form :model="form" class="auth-form" @submit.prevent="handleSubmit">
+          <el-form-item label="用户名">
+            <el-input
+              v-model.trim="form.username"
+              placeholder="3-50 个字符"
+              size="large"
+              :prefix-icon="User"
+            />
+          </el-form-item>
 
-      <el-form :model="form" label-position="top" @submit.prevent="handleSubmit">
-        <el-form-item label="用户名">
-          <el-input v-model.trim="form.username" placeholder="3-50 个字符" />
-        </el-form-item>
-        <el-form-item label="密码">
-          <el-input v-model.trim="form.password" type="password" show-password placeholder="6-20 个字符" />
-        </el-form-item>
-        <el-form-item label="确认密码">
-          <el-input
-            v-model.trim="form.confirmPassword"
-            type="password"
-            show-password
-            placeholder="再次输入密码"
-          />
-        </el-form-item>
-        <div class="landing-auth-actions">
+          <el-form-item label="密码">
+            <el-input
+              v-model.trim="form.password"
+              type="password"
+              show-password
+              placeholder="6-20 个字符"
+              size="large"
+              :prefix-icon="Lock"
+            />
+          </el-form-item>
+
+          <el-form-item label="确认密码">
+            <el-input
+              v-model.trim="form.confirmPassword"
+              type="password"
+              show-password
+              placeholder="再次输入密码"
+              size="large"
+              :prefix-icon="Lock"
+            />
+          </el-form-item>
+
           <el-button
             type="primary"
-            class="landing-login-submit full-width"
+            size="large"
+            class="auth-submit"
             :loading="authStore.loading"
             @click="handleSubmit"
           >
             立即注册
           </el-button>
-          <RouterLink to="/login" class="landing-register-entry landing-register-entry-login">
-            <span class="landing-register-entry-label">已经有账号？</span>
-            <strong>直接返回登录，进入工作台</strong>
-            <span class="landing-register-entry-meta">已有账号无需重复注册，登录后可继续已有数据和会话</span>
-          </RouterLink>
+        </el-form>
+
+        <div class="auth-footer">
+          <span class="auth-footer-text">已经有账号？</span>
+          <RouterLink to="/login" class="auth-footer-link">立即登录</RouterLink>
         </div>
-        <div class="toolbar">
-          <RouterLink to="/login">
-            <el-button class="landing-secondary-button">返回登录</el-button>
-          </RouterLink>
+      </div>
+
+      <div class="auth-features">
+        <div class="feature-item">
+          <div class="feature-icon">🔒</div>
+          <div class="feature-text">
+            <strong>数据隔离</strong>
+            <span>独立的用户数据空间</span>
+          </div>
         </div>
-      </el-form>
-    </section>
+        <div class="feature-item">
+          <div class="feature-icon">⚡</div>
+          <div class="feature-text">
+            <strong>快速开始</strong>
+            <span>注册后立即使用</span>
+          </div>
+        </div>
+        <div class="feature-item">
+          <div class="feature-icon">💾</div>
+          <div class="feature-text">
+            <strong>永久保存</strong>
+            <span>数据长期保存</span>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
 import { ElMessage } from "element-plus";
+import { User, Lock } from "@element-plus/icons-vue";
 import { reactive, ref } from "vue";
 import { RouterLink, useRouter } from "vue-router";
 
@@ -120,3 +141,253 @@ async function handleSubmit() {
   }
 }
 </script>
+
+<style scoped>
+.auth-page {
+  min-height: 100vh;
+  background: linear-gradient(180deg, #0f1419 0%, #1a1f2e 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+  position: relative;
+  overflow: hidden;
+}
+
+.auth-background {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.gradient-orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(100px);
+  opacity: 0.3;
+  animation: float 20s ease-in-out infinite;
+}
+
+.orb-1 {
+  width: 500px;
+  height: 500px;
+  background: linear-gradient(135deg, #ff6b35 0%, #f7931e 100%);
+  top: -150px;
+  right: -150px;
+}
+
+.orb-2 {
+  width: 400px;
+  height: 400px;
+  background: linear-gradient(135deg, #4a90e2 0%, #357abd 100%);
+  bottom: -100px;
+  left: -100px;
+  animation-delay: 5s;
+}
+
+@keyframes float {
+  0%, 100% {
+    transform: translate(0, 0) scale(1);
+  }
+  50% {
+    transform: translate(30px, -30px) scale(1.1);
+  }
+}
+
+.auth-container {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 1000px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3rem;
+  align-items: center;
+}
+
+.auth-card {
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
+  padding: 3rem;
+}
+
+.auth-header {
+  text-align: center;
+  margin-bottom: 2rem;
+}
+
+.auth-logo {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
+  text-decoration: none;
+  margin-bottom: 2rem;
+}
+
+.logo-icon {
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #ff6b35 0%, #f7931e 100%);
+  border-radius: 12px;
+  font-weight: 700;
+  font-size: 1.5rem;
+  color: #ffffff;
+}
+
+.logo-text {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.auth-title {
+  font-size: 2rem;
+  font-weight: 700;
+  color: #ffffff;
+  margin-bottom: 0.5rem;
+}
+
+.auth-description {
+  font-size: 1rem;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.auth-alert {
+  margin-bottom: 1.5rem;
+}
+
+.auth-form {
+  margin-bottom: 1.5rem;
+}
+
+.auth-form :deep(.el-form-item__label) {
+  color: rgba(255, 255, 255, 0.9);
+  font-weight: 500;
+}
+
+.auth-form :deep(.el-input__wrapper) {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  box-shadow: none;
+}
+
+.auth-form :deep(.el-input__wrapper:hover) {
+  border-color: rgba(255, 107, 53, 0.5);
+}
+
+.auth-form :deep(.el-input__wrapper.is-focus) {
+  border-color: #ff6b35;
+  box-shadow: 0 0 0 2px rgba(255, 107, 53, 0.2);
+}
+
+.auth-form :deep(.el-input__inner) {
+  color: #ffffff;
+}
+
+.auth-form :deep(.el-input__inner::placeholder) {
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.auth-form :deep(.el-input__prefix) {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.auth-submit {
+  width: 100%;
+  height: 48px;
+  background: linear-gradient(135deg, #ff6b35 0%, #f7931e 100%);
+  border: none;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.auth-submit:hover {
+  background: linear-gradient(135deg, #ff7a45 0%, #ffa02e 100%);
+  transform: translateY(-2px);
+  box-shadow: 0 10px 30px rgba(255, 107, 53, 0.4);
+}
+
+.auth-footer {
+  text-align: center;
+  padding-top: 1.5rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.auth-footer-text {
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 0.875rem;
+}
+
+.auth-footer-link {
+  color: #ff6b35;
+  text-decoration: none;
+  font-weight: 600;
+  margin-left: 0.5rem;
+}
+
+.auth-footer-link:hover {
+  text-decoration: underline;
+}
+
+.auth-features {
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+}
+
+.feature-item {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 1.5rem;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+}
+
+.feature-icon {
+  font-size: 2rem;
+  width: 60px;
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, rgba(255, 107, 53, 0.2) 0%, rgba(74, 144, 226, 0.2) 100%);
+  border-radius: 12px;
+}
+
+.feature-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.feature-text strong {
+  color: #ffffff;
+  font-size: 1.125rem;
+}
+
+.feature-text span {
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 0.875rem;
+}
+
+@media (max-width: 768px) {
+  .auth-container {
+    grid-template-columns: 1fr;
+  }
+
+  .auth-features {
+    display: none;
+  }
+
+  .auth-card {
+    padding: 2rem;
+  }
+}
+</style>

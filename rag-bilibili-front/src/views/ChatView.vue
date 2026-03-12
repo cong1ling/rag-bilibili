@@ -45,7 +45,12 @@
               <StatusPill :label="roleMeta(message.role).label" :tone="roleMeta(message.role).tone" />
               <span class="muted">{{ formatDateTime(message.createTime) }}</span>
             </div>
-            <p class="message-content">{{ message.content || "..." }}</p>
+            <MarkdownContent
+              v-if="message.role === 'ASSISTANT'"
+              :content="message.content || '...'"
+              class="message-content"
+            />
+            <p v-else class="message-content">{{ message.content || "..." }}</p>
           </article>
         </div>
 
@@ -128,6 +133,7 @@ import { RouterLink, useRoute, useRouter } from "vue-router";
 import AppShell from "../components/AppShell.vue";
 import EmptyState from "../components/EmptyState.vue";
 import StatusPill from "../components/StatusPill.vue";
+import MarkdownContent from "../components/MarkdownContent.vue";
 import { messagesApi } from "../api/messages";
 import { sessionsApi } from "../api/sessions";
 import { MESSAGE_ROLE_META } from "../constants/options";
@@ -146,7 +152,7 @@ const streaming = ref(false);
 const inlineError = ref("");
 const draft = ref("");
 let abortController = null;
-let streamFrameId = 0;
+let streamThrottleTimer = null;
 let pendingAssistantMessage = null;
 let pendingAssistantDelta = "";
 
@@ -166,6 +172,18 @@ function withLocalKey(message) {
     localKey: message.id || `${message.role}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     ...message,
   };
+}
+
+function patchMessage(localKey, updater) {
+  const index = messages.value.findIndex((item) => item.localKey === localKey);
+  if (index < 0) {
+    return null;
+  }
+
+  const current = messages.value[index];
+  const next = typeof updater === "function" ? updater(current) : { ...current, ...updater };
+  messages.value[index] = next;
+  return next;
 }
 
 async function loadSession() {
@@ -205,11 +223,11 @@ function abortStream() {
 }
 
 function clearPendingStreamFrame() {
-  if (!streamFrameId) {
+  if (!streamThrottleTimer) {
     return;
   }
-  window.cancelAnimationFrame(streamFrameId);
-  streamFrameId = 0;
+  clearTimeout(streamThrottleTimer);
+  streamThrottleTimer = null;
 }
 
 function flushPendingAssistantContent() {
@@ -219,7 +237,10 @@ function flushPendingAssistantContent() {
     return;
   }
 
-  pendingAssistantMessage.content += pendingAssistantDelta;
+  pendingAssistantMessage = patchMessage(pendingAssistantMessage.localKey, (current) => ({
+    ...current,
+    content: `${current.content || ""}${pendingAssistantDelta}`,
+  }));
   pendingAssistantDelta = "";
 }
 
@@ -227,14 +248,14 @@ function scheduleAssistantContent(message, delta) {
   pendingAssistantMessage = message;
   pendingAssistantDelta += delta;
 
-  if (streamFrameId) {
+  if (streamThrottleTimer) {
     return;
   }
 
-  streamFrameId = window.requestAnimationFrame(() => {
-    streamFrameId = 0;
+  streamThrottleTimer = setTimeout(() => {
+    streamThrottleTimer = null;
     flushPendingAssistantContent();
-  });
+  }, 100);
 }
 
 async function sendMessage() {
@@ -273,7 +294,10 @@ async function sendMessage() {
       {
         start(payload) {
           hasStarted = true;
-          userMessage.id = payload.userMessageId || userMessage.id;
+          patchMessage(userMessage.localKey, (current) => ({
+            ...current,
+            id: payload.userMessageId || current.id,
+          }));
           draft.value = "";
           logger.info("chat", "收到 start 事件", payload);
         },
@@ -286,8 +310,11 @@ async function sendMessage() {
         end(payload) {
           flushPendingAssistantContent();
           hasCompleted = true;
-          assistantMessage.id = payload.assistantMessageId || assistantMessage.id;
-          assistantMessage.content = payload.fullContent || assistantMessage.content;
+          pendingAssistantMessage = patchMessage(assistantMessage.localKey, (current) => ({
+            ...current,
+            id: payload.assistantMessageId || current.id,
+            content: payload.fullContent || current.content,
+          }));
           logger.info("chat", "收到 end 事件", payload);
         },
         error(payload) {
@@ -308,8 +335,10 @@ async function sendMessage() {
         );
         draft.value = previousDraft;
       } else if (!hasCompleted) {
-        assistantMessage.content =
-          assistantMessage.content || "当前回答已停止显示，你可以刷新会话后继续查看。";
+        patchMessage(assistantMessage.localKey, (current) => ({
+          ...current,
+          content: current.content || "当前回答已停止显示，你可以刷新会话后继续查看。",
+        }));
       }
       ElMessage.warning("已停止当前流式响应");
     } else {
@@ -321,7 +350,10 @@ async function sendMessage() {
         );
         draft.value = previousDraft;
       } else {
-        assistantMessage.content = assistantMessage.content || "回答生成中断，请稍后刷新会话再试。";
+        patchMessage(assistantMessage.localKey, (current) => ({
+          ...current,
+          content: current.content || "回答生成中断，请稍后刷新会话再试。",
+        }));
       }
     }
   } finally {

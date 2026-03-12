@@ -1,6 +1,10 @@
 package com.example.ragbilibili.service.impl;
 
 import com.alibaba.cloud.ai.vectorstore.dashvector.DashVectorStore;
+import com.example.ragbilibili.dto.sse.SseContentEvent;
+import com.example.ragbilibili.dto.sse.SseEndEvent;
+import com.example.ragbilibili.dto.sse.SseErrorEvent;
+import com.example.ragbilibili.dto.sse.SseStartEvent;
 import com.example.ragbilibili.entity.Message;
 import com.example.ragbilibili.entity.Session;
 import com.example.ragbilibili.entity.Video;
@@ -12,6 +16,7 @@ import com.example.ragbilibili.mapper.MessageMapper;
 import com.example.ragbilibili.mapper.SessionMapper;
 import com.example.ragbilibili.mapper.VideoMapper;
 import com.example.ragbilibili.service.ChatService;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -20,13 +25,14 @@ import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.filter.FilterExpressionBuilder;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.core.task.TaskExecutor;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.publisher.Flux;
 
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.stream.Collectors;
 
 @Service
 public class ChatServiceImpl implements ChatService {
@@ -46,6 +52,13 @@ public class ChatServiceImpl implements ChatService {
 
     @Autowired
     private ChatClient.Builder chatClientBuilder;
+
+    @Autowired
+    private ObjectMapper objectMapper;
+
+    @Autowired
+    @Qualifier("taskExecutor")
+    private TaskExecutor taskExecutor;
 
     private static final int TOP_K = 5;
     private static final long SSE_TIMEOUT = 60000L;
@@ -69,24 +82,30 @@ public class ChatServiceImpl implements ChatService {
         // 3. 创建 SSE Emitter
         SseEmitter emitter = new SseEmitter(SSE_TIMEOUT);
 
-        // 4. 异步处理
-        new Thread(() -> {
+        // 4. 使用TaskExecutor异步处理
+        taskExecutor.execute(() -> {
             try {
-                // 5. RAG 检索
+                // 5. 发送start事件
+                SseStartEvent startEvent = new SseStartEvent(userMessage.getId());
+                emitter.send(SseEmitter.event()
+                        .name("start")
+                        .data(objectMapper.writeValueAsString(startEvent)));
+
+                // 6. RAG 检索
                 List<Document> relevantDocs = retrieveRelevantDocuments(session, content, userId);
 
-                // 6. 构建上下文
+                // 7. 构建上下文
                 String context = buildContext(relevantDocs);
 
-                // 7. 获取历史消息
+                // 8. 获取历史消息
                 List<Message> historyMessages = messageMapper.selectBySessionId(sessionId);
                 String chatHistory = buildChatHistory(historyMessages);
 
-                // 8. 构建提示词
+                // 9. 构建提示词
                 String systemPrompt = buildSystemPrompt(context);
                 String userPrompt = content;
 
-                // 9. 流式调用 LLM
+                // 10. 流式调用 LLM
                 ChatClient chatClient = chatClientBuilder.build();
                 Flux<ChatResponse> responseFlux = chatClient.prompt()
                         .system(systemPrompt)
@@ -94,19 +113,20 @@ public class ChatServiceImpl implements ChatService {
                         .stream()
                         .chatResponse();
 
-                // 10. 收集完整响应
+                // 11. 收集完整响应
                 StringBuilder fullResponse = new StringBuilder();
 
-                // 11. 流式发送
+                // 12. 流式发送
                 responseFlux.subscribe(
                         response -> {
                             String chunk = response.getResult().getOutput().getText();
                             if (chunk != null && !chunk.isEmpty()) {
                                 fullResponse.append(chunk);
                                 try {
+                                    SseContentEvent contentEvent = new SseContentEvent(chunk);
                                     emitter.send(SseEmitter.event()
-                                            .data(chunk)
-                                            .name("message"));
+                                            .name("content")
+                                            .data(objectMapper.writeValueAsString(contentEvent)));
                                 } catch (Exception e) {
                                     log.error("SSE发送失败", e);
                                     emitter.completeWithError(e);
@@ -115,28 +135,59 @@ public class ChatServiceImpl implements ChatService {
                         },
                         error -> {
                             log.error("LLM调用失败", error);
+                            try {
+                                SseErrorEvent errorEvent = new SseErrorEvent(
+                                        error.getMessage() != null ? error.getMessage() : "未知错误");
+                                emitter.send(SseEmitter.event()
+                                        .name("error")
+                                        .data(objectMapper.writeValueAsString(errorEvent)));
+                            } catch (Exception e) {
+                                log.error("发送错误事件失败", e);
+                            }
                             emitter.completeWithError(error);
                         },
                         () -> {
-                            // 12. 保存助手消息
-                            Message assistantMessage = new Message();
-                            assistantMessage.setSessionId(sessionId);
-                            assistantMessage.setRole(MessageRole.ASSISTANT.getCode());
-                            assistantMessage.setContent(fullResponse.toString());
-                            assistantMessage.setCreateTime(LocalDateTime.now());
-                            messageMapper.insert(assistantMessage);
+                            try {
+                                // 13. 保存助手消息
+                                Message assistantMessage = new Message();
+                                assistantMessage.setSessionId(sessionId);
+                                assistantMessage.setRole(MessageRole.ASSISTANT.getCode());
+                                assistantMessage.setContent(fullResponse.toString());
+                                assistantMessage.setCreateTime(LocalDateTime.now());
+                                messageMapper.insert(assistantMessage);
 
-                            // 13. 完成 SSE
-                            emitter.complete();
-                            log.info("对话完成: sessionId={}, userId={}", sessionId, userId);
+                                // 14. 发送end事件
+                                SseEndEvent endEvent = new SseEndEvent(
+                                        assistantMessage.getId(),
+                                        fullResponse.toString());
+                                emitter.send(SseEmitter.event()
+                                        .name("end")
+                                        .data(objectMapper.writeValueAsString(endEvent)));
+
+                                // 15. 完成 SSE
+                                emitter.complete();
+                                log.info("对话完成: sessionId={}, userId={}", sessionId, userId);
+                            } catch (Exception e) {
+                                log.error("发送end事件失败", e);
+                                emitter.completeWithError(e);
+                            }
                         }
                 );
 
             } catch (Exception e) {
                 log.error("对话处理失败: sessionId={}, userId={}", sessionId, userId, e);
+                try {
+                    SseErrorEvent errorEvent = new SseErrorEvent(
+                            e.getMessage() != null ? e.getMessage() : "处理失败");
+                    emitter.send(SseEmitter.event()
+                            .name("error")
+                            .data(objectMapper.writeValueAsString(errorEvent)));
+                } catch (Exception ex) {
+                    log.error("发送错误事件失败", ex);
+                }
                 emitter.completeWithError(e);
             }
-        }).start();
+        });
 
         return emitter;
     }
