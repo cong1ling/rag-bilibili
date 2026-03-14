@@ -20,6 +20,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.SearchRequest;
@@ -32,7 +34,9 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.publisher.Flux;
 
 import java.time.LocalDateTime;
+import java.util.Comparator;
 import java.util.List;
+import java.util.stream.Collectors;
 
 @Service
 public class ChatServiceImpl implements ChatService {
@@ -62,6 +66,7 @@ public class ChatServiceImpl implements ChatService {
 
     private static final int TOP_K = 5;
     private static final long SSE_TIMEOUT = 60000L;
+    private static final int MAX_HISTORY = 10;
 
     @Override
     public SseEmitter streamMessage(Long sessionId, String content, Long userId) {
@@ -97,19 +102,20 @@ public class ChatServiceImpl implements ChatService {
                 // 7. 构建上下文
                 String context = buildContext(relevantDocs);
 
-                // 8. 获取历史消息
+                // 8. 获取历史消息（排除刚插入的当前用户消息）
                 List<Message> historyMessages = messageMapper.selectBySessionId(sessionId);
-                String chatHistory = buildChatHistory(historyMessages);
+                List<org.springframework.ai.chat.messages.Message> springAiMessages =
+                        buildMessageHistory(historyMessages, userMessage.getId());
 
                 // 9. 构建提示词
                 String systemPrompt = buildSystemPrompt(context);
-                String userPrompt = content;
 
                 // 10. 流式调用 LLM
                 ChatClient chatClient = chatClientBuilder.build();
                 Flux<ChatResponse> responseFlux = chatClient.prompt()
                         .system(systemPrompt)
-                        .user(userPrompt)
+                        .messages(springAiMessages)
+                        .user(content)
                         .stream()
                         .chatResponse();
 
@@ -251,25 +257,25 @@ public class ChatServiceImpl implements ChatService {
     }
 
     /**
-     * 构建聊天历史
+     * 构建聊天历史（滑动窗口，转换为 Spring AI Message 类型）
      */
-    private String buildChatHistory(List<Message> messages) {
-        if (messages.isEmpty()) {
-            return "";
-        }
+    private List<org.springframework.ai.chat.messages.Message> buildMessageHistory(
+            List<Message> messages, Long excludeId) {
+        List<Message> filtered = messages.stream()
+                .filter(m -> !m.getId().equals(excludeId))
+                .sorted(Comparator.comparing(Message::getCreateTime))
+                .collect(Collectors.toList());
 
-        // 只保留最近的几轮对话（避免上下文过长）
-        int maxHistory = 10;
-        int startIndex = Math.max(0, messages.size() - maxHistory);
-        List<Message> recentMessages = messages.subList(startIndex, messages.size());
-
-        StringBuilder history = new StringBuilder();
-        for (Message msg : recentMessages) {
-            String role = msg.getRole().equals(MessageRole.USER.getCode()) ? "用户" : "助手";
-            history.append(String.format("%s: %s\n", role, msg.getContent()));
-        }
-
-        return history.toString();
+        int start = Math.max(0, filtered.size() - MAX_HISTORY);
+        return filtered.subList(start, filtered.size()).stream()
+                .map(m -> {
+                    if (m.getRole().equals(MessageRole.USER.getCode())) {
+                        return (org.springframework.ai.chat.messages.Message) new UserMessage(m.getContent());
+                    } else {
+                        return (org.springframework.ai.chat.messages.Message) new AssistantMessage(m.getContent());
+                    }
+                })
+                .collect(Collectors.toList());
     }
 
     /**
