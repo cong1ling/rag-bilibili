@@ -268,13 +268,9 @@ public class ChatServiceImpl implements ChatService {
 
         int start = Math.max(0, filtered.size() - MAX_HISTORY);
         return filtered.subList(start, filtered.size()).stream()
-                .map(m -> {
-                    if (m.getRole().equals(MessageRole.USER.getCode())) {
-                        return (org.springframework.ai.chat.messages.Message) new UserMessage(m.getContent());
-                    } else {
-                        return (org.springframework.ai.chat.messages.Message) new AssistantMessage(m.getContent());
-                    }
-                })
+                .map(m -> m.getRole().equals(MessageRole.USER.getCode())
+                        ? new UserMessage(m.getContent())
+                        : new AssistantMessage(m.getContent()))
                 .collect(Collectors.toList());
     }
 
