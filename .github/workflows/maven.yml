@@ -3,8 +3,7 @@
 
 # This workflow uses actions that are not certified by GitHub.
 # They are provided by a third-party and are governed by
-# separate terms of service, privacy policy, and support
-# documentation.
+# separate terms of service, privacy policy, and support documentation.
 
 name: Java CI with Maven
 
@@ -49,24 +48,28 @@ jobs:
         username: ${{ secrets.ECS_USER }}
         key: ${{ secrets.ECS_SSH_KEY }}
         script: |
-          # 1. 加载全局环境变量（数据库/AI密钥/向量库配置 全部生效）
-          source /etc/profile
-          
-          # 2. 强制停止旧服务，忽略错误
-          pkill -f 'rag-bilibili-server-1.0.0.jar' 2>/dev/null || true
-          sleep 3
-          
-          # 3. 标准后台启动（永久运行，断开SSH不会关闭）
-          cd /opt/rag-bilibili
-          nohup java -Xmx768m -jar rag-bilibili-server-1.0.0.jar > app.log 2>&1 &
-          
-          # 4. 等待服务启动完成
-          sleep 6
-          
-          # 5. 校验是否启动成功
-          if pgrep -f 'rag-bilibili-server-1.0.0.jar' > /dev/null; then
-            echo "✅ 部署成功！服务已在后台持续运行"
-          else
-            echo "❌ 部署失败！请查看日志: cat /opt/rag-bilibili/app.log"
-            exit 1
-          fi
+          bash -c '
+            # 加载全局环境变量
+            source /etc/profile;
+            
+            # 停止旧服务
+            pkill -f "rag-bilibili-server-1.0.0.jar" 2>/dev/null || true;
+            sleep 3;
+            
+            # 后台启动服务（永久运行，脱离SSH）
+            cd /opt/rag-bilibili;
+            nohup java -Xmx768m -jar rag-bilibili-server-1.0.0.jar > app.log 2>&1 &
+            disown;
+            
+            # 等待启动
+            sleep 6;
+            
+            # 校验结果
+            if pgrep -f "rag-bilibili-server-1.0.0.jar" > /dev/null; then
+              echo " 部署成功！环境变量已正常加载"
+              exit 0;
+            else
+              echo " 部署失败！查看日志：cat /opt/rag-bilibili/app.log"
+              exit 1;
+            fi
+          '
