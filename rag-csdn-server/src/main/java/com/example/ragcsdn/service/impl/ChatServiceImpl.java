@@ -87,6 +87,9 @@ public class ChatServiceImpl implements ChatService {
     @Autowired
     private ChatOptimizationProperties chatOptimizationProperties;
 
+    @Autowired
+    private QueryComplexityAnalyzer queryComplexityAnalyzer;
+
     private enum QueryIntent {
         DIRECT,
         AMBIGUOUS,
@@ -112,6 +115,25 @@ public class ChatServiceImpl implements ChatService {
             String originalQuery,
             String rewrittenQuery,
             List<RetrievalQuery> retrievalQueries
+    ) {
+    }
+
+    private record RoutingAnalysis(
+            QueryIntent suggestedIntent,
+            double ambiguityScore,
+            double breadthScore,
+            double complexityScore,
+            double decisionConfidence,
+            boolean conversationDependent
+    ) {
+    }
+
+    private record QueryUnderstandingDecision(
+            QueryPlan queryPlan,
+            RoutingAnalysis routingAnalysis,
+            boolean usedLlmFallback,
+            boolean usedHyde,
+            boolean usedDecomposition
     ) {
     }
 
@@ -1126,15 +1148,72 @@ public class ChatServiceImpl implements ChatService {
             return defaultTopK;
         }
 
-        List<String> keywords = extractKeywords(query);
-        String normalizedQuery = normalizeForMatch(query);
-        if (isComplexQuery(session, normalizedQuery, keywords)) {
+        RoutingAnalysis routingAnalysis = analyzeRouting(
+                query,
+                new ConversationMemory(List.of(), null, false)
+        );
+
+        if (routingAnalysis.complexityScore() >= getComplexityThreshold()
+                || routingAnalysis.suggestedIntent() != QueryIntent.DIRECT
+                || (session != null && SessionType.isAllArticles(session.getSessionType()))) {
             return getComplexTopK(defaultTopK);
         }
-        if (isSimpleFactQuery(normalizedQuery, keywords)) {
+        if (isSimpleFactQuery(normalizeForMatch(query), extractKeywords(query))
+                && routingAnalysis.complexityScore() < getComplexityThreshold()) {
             return getSimpleTopK(defaultTopK);
         }
         return getNormalTopK(defaultTopK);
+    }
+
+    private RoutingAnalysis analyzeRouting(String rewrittenQuery, ConversationMemory memory) {
+        boolean conversationDependent = rewrittenQuery != null
+                && rewrittenQuery.length() <= 24
+                && memory != null
+                && (!memory.recentMessages().isEmpty() || (memory.summary() != null && !memory.summary().isBlank()));
+
+        QueryComplexityAnalyzer.Analysis analysis =
+                queryComplexityAnalyzer.analyze(rewrittenQuery, conversationDependent);
+
+        QueryIntent suggestedIntent = switch (analysis.suggestedIntent()) {
+            case AMBIGUOUS -> QueryIntent.AMBIGUOUS;
+            case BROAD -> QueryIntent.BROAD;
+            case DIRECT -> QueryIntent.DIRECT;
+        };
+
+        return new RoutingAnalysis(
+                suggestedIntent,
+                analysis.ambiguityScore(),
+                analysis.breadthScore(),
+                analysis.complexityScore(),
+                analysis.decisionConfidence(),
+                conversationDependent
+        );
+    }
+
+    private void logRoutingDecision(String originalQuery, String rewrittenQuery, RoutingAnalysis routingAnalysis,
+                                    QueryIntent finalIntent, boolean usedLlmFallback,
+                                    boolean usedHyde, boolean usedDecomposition, int finalTopK, int retrievedDocCount) {
+        log.info(
+                "routing decision: originalQuery={}, rewrittenQuery={}, suggestedIntent={}, finalIntent={}, "
+                        + "ambiguityScore={}, breadthScore={}, complexityScore={}, decisionConfidence={}, "
+                        + "usedLlmFallback={}, usedHyde={}, usedDecomposition={}, finalTopK={}, retrievedDocCount={}, "
+                        + "ruleRoutingEnabled={}, routingObservationOnly={}",
+                originalQuery,
+                rewrittenQuery,
+                routingAnalysis.suggestedIntent(),
+                finalIntent,
+                routingAnalysis.ambiguityScore(),
+                routingAnalysis.breadthScore(),
+                routingAnalysis.complexityScore(),
+                routingAnalysis.decisionConfidence(),
+                usedLlmFallback,
+                usedHyde,
+                usedDecomposition,
+                finalTopK,
+                retrievedDocCount,
+                isRuleRoutingEnabled(),
+                isRoutingObservationOnly()
+        );
     }
 
     private boolean isSimpleFactQuery(String normalizedQuery, List<String> keywords) {
@@ -1333,6 +1412,23 @@ public class ChatServiceImpl implements ChatService {
 
     private boolean isDynamicTopKEnabled() {
         return chatOptimizationProperties == null || !Boolean.FALSE.equals(chatOptimizationProperties.getDynamicTopKEnabled());
+    }
+
+    private boolean isRuleRoutingEnabled() {
+        return chatOptimizationProperties == null
+                || !Boolean.FALSE.equals(chatOptimizationProperties.getRuleRoutingEnabled());
+    }
+
+    private boolean isRoutingObservationOnly() {
+        return chatOptimizationProperties != null
+                && Boolean.TRUE.equals(chatOptimizationProperties.getRoutingObservationOnly());
+    }
+
+    private double getComplexityThreshold() {
+        if (chatOptimizationProperties == null || chatOptimizationProperties.getComplexityThreshold() == null) {
+            return 0.55d;
+        }
+        return chatOptimizationProperties.getComplexityThreshold();
     }
 
     private int getSimpleTopK(int fallback) {

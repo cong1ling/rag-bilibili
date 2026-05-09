@@ -1,5 +1,6 @@
 package com.example.ragcsdn.service.impl;
 
+import com.example.ragcsdn.config.ChatOptimizationProperties;
 import com.example.ragcsdn.entity.Message;
 import com.example.ragcsdn.entity.Session;
 import com.example.ragcsdn.enums.MessageRole;
@@ -10,6 +11,7 @@ import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.document.Document;
 
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -156,6 +158,27 @@ class ChatServiceImplTest {
 
     private int invokeDetermineTopK(Session session, String query) throws Exception {
         return (int) determineTopK.invoke(chatService, session, query);
+    }
+
+    private void setField(String fieldName, Object value) throws Exception {
+        Field field = ChatServiceImpl.class.getDeclaredField(fieldName);
+        field.setAccessible(true);
+        field.set(chatService, value);
+    }
+
+    private ChatOptimizationProperties defaultProperties() {
+        ChatOptimizationProperties properties = new ChatOptimizationProperties();
+        properties.setRuleRoutingEnabled(true);
+        properties.setRoutingObservationOnly(true);
+        properties.setRuleRoutingLlmFallbackEnabled(true);
+        properties.setAmbiguityThreshold(0.62d);
+        properties.setBreadthThreshold(0.58d);
+        properties.setComplexityThreshold(0.55d);
+        properties.setLlmFallbackConfidenceThreshold(0.52d);
+        properties.setSimpleTopK(3);
+        properties.setNormalTopK(5);
+        properties.setComplexTopK(8);
+        return properties;
     }
 
     /**
@@ -455,6 +478,26 @@ class ChatServiceImplTest {
         int topK = invokeDetermineTopK(session, "Spring Boot 的自动配置机制介绍一下");
 
         assertThat(topK).isEqualTo(5);
+    }
+
+    @Test
+    void determineTopK_usesAnalyzerForSimpleQueries() throws Exception {
+        setField("chatOptimizationProperties", defaultProperties());
+        setField("queryComplexityAnalyzer", new QueryComplexityAnalyzer(defaultProperties()));
+
+        int topK = invokeDetermineTopK(null, "mysql 默认端口是多少");
+
+        assertThat(topK).isEqualTo(3);
+    }
+
+    @Test
+    void determineTopK_usesAnalyzerForBroadQueries() throws Exception {
+        setField("chatOptimizationProperties", defaultProperties());
+        setField("queryComplexityAnalyzer", new QueryComplexityAnalyzer(defaultProperties()));
+
+        int topK = invokeDetermineTopK(null, "分析 Spring AI 检索链路的流程、取舍与优化方式");
+
+        assertThat(topK).isEqualTo(8);
     }
 }
 
