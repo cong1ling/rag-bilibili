@@ -7,6 +7,20 @@ public class ChatOptimizationProperties {
     private Integer maxHistory = 10;
     private Boolean queryRewriteEnabled = true;
     private Boolean queryUnderstandingEnabled = true;
+    // Rule-first routing expectations:
+    // 1. routing can be disabled globally
+    // 2. observation mode can run without changing behavior
+    // 3. LLM fallback can be switched off independently
+    // 4. HyDE/decomposition thresholds are tuned separately from intent thresholds
+    private Boolean ruleRoutingEnabled = true;
+    private Boolean routingObservationOnly = true;
+    private Boolean ruleRoutingLlmFallbackEnabled = true;
+    private Double ambiguityThreshold = 0.62d;
+    private Double breadthThreshold = 0.58d;
+    private Double complexityThreshold = 0.55d;
+    private Double llmFallbackConfidenceThreshold = 0.52d;
+    private Double hydeTriggerThreshold = 0.72d;
+    private Double decompositionTriggerThreshold = 0.68d;
     private Boolean hydeEnabled = true;
     private Boolean decompositionEnabled = true;
     private Integer maxDecomposedQueries = 4;
@@ -48,6 +62,78 @@ public class ChatOptimizationProperties {
 
     public void setQueryUnderstandingEnabled(Boolean queryUnderstandingEnabled) {
         this.queryUnderstandingEnabled = queryUnderstandingEnabled;
+    }
+
+    public Boolean getRuleRoutingEnabled() {
+        return ruleRoutingEnabled;
+    }
+
+    public void setRuleRoutingEnabled(Boolean ruleRoutingEnabled) {
+        this.ruleRoutingEnabled = ruleRoutingEnabled;
+    }
+
+    public Boolean getRoutingObservationOnly() {
+        return routingObservationOnly;
+    }
+
+    public void setRoutingObservationOnly(Boolean routingObservationOnly) {
+        this.routingObservationOnly = routingObservationOnly;
+    }
+
+    public Boolean getRuleRoutingLlmFallbackEnabled() {
+        return ruleRoutingLlmFallbackEnabled;
+    }
+
+    public void setRuleRoutingLlmFallbackEnabled(Boolean ruleRoutingLlmFallbackEnabled) {
+        this.ruleRoutingLlmFallbackEnabled = ruleRoutingLlmFallbackEnabled;
+    }
+
+    public Double getAmbiguityThreshold() {
+        return ambiguityThreshold;
+    }
+
+    public void setAmbiguityThreshold(Double ambiguityThreshold) {
+        this.ambiguityThreshold = ambiguityThreshold;
+    }
+
+    public Double getBreadthThreshold() {
+        return breadthThreshold;
+    }
+
+    public void setBreadthThreshold(Double breadthThreshold) {
+        this.breadthThreshold = breadthThreshold;
+    }
+
+    public Double getComplexityThreshold() {
+        return complexityThreshold;
+    }
+
+    public void setComplexityThreshold(Double complexityThreshold) {
+        this.complexityThreshold = complexityThreshold;
+    }
+
+    public Double getLlmFallbackConfidenceThreshold() {
+        return llmFallbackConfidenceThreshold;
+    }
+
+    public void setLlmFallbackConfidenceThreshold(Double llmFallbackConfidenceThreshold) {
+        this.llmFallbackConfidenceThreshold = llmFallbackConfidenceThreshold;
+    }
+
+    public Double getHydeTriggerThreshold() {
+        return hydeTriggerThreshold;
+    }
+
+    public void setHydeTriggerThreshold(Double hydeTriggerThreshold) {
+        this.hydeTriggerThreshold = hydeTriggerThreshold;
+    }
+
+    public Double getDecompositionTriggerThreshold() {
+        return decompositionTriggerThreshold;
+    }
+
+    public void setDecompositionTriggerThreshold(Double decompositionTriggerThreshold) {
+        this.decompositionTriggerThreshold = decompositionTriggerThreshold;
     }
 
     public Boolean getHydeEnabled() {
