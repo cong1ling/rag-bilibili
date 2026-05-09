@@ -1,5 +1,7 @@
 package com.alibaba.cloud.ai.reader.csdn;
 
+import com.example.ragcsdn.cleaning.StructuredArticleCleaner;
+import com.example.ragcsdn.cleaning.model.CleaningBlock;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Element;
 import org.slf4j.Logger;
@@ -37,6 +39,7 @@ public class CsdnDocumentReader implements DocumentReader {
     private final List<CsdnResource> csdnResourceList;
     private final HttpClient httpClient;
     private final String cookieHeader;
+    private final StructuredArticleCleaner structuredArticleCleaner;
 
     public CsdnDocumentReader(CsdnResource csdnResource) {
         this(csdnResource, null);
@@ -47,6 +50,7 @@ public class CsdnDocumentReader implements DocumentReader {
         this.csdnResourceList = null;
         this.httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build();
         this.cookieHeader = cookieHeader;
+        this.structuredArticleCleaner = new StructuredArticleCleaner();
     }
 
     public CsdnDocumentReader(List<CsdnResource> csdnResourceList) {
@@ -58,6 +62,7 @@ public class CsdnDocumentReader implements DocumentReader {
         this.csdnResourceList = csdnResourceList;
         this.httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build();
         this.cookieHeader = cookieHeader;
+        this.structuredArticleCleaner = new StructuredArticleCleaner();
     }
 
     @Override
@@ -269,6 +274,12 @@ public class CsdnDocumentReader implements DocumentReader {
     }
 
     private String extractCleanContent(Element contentElement) {
+        List<CleaningBlock> blocks = structuredArticleCleaner.extractBlocks(contentElement.outerHtml());
+        String structuredContent = buildStructuredContent(blocks);
+        if (!structuredContent.isBlank()) {
+            return structuredContent;
+        }
+
         Set<String> segments = new LinkedHashSet<>();
         for (Element element : contentElement.select("p,li,pre,code,blockquote,h2,h3,h4,h5,h6,tr")) {
             appendMeaningfulSegment(segments, element.text());
@@ -288,6 +299,46 @@ public class CsdnDocumentReader implements DocumentReader {
         }
 
         return String.join("\n", segments);
+    }
+
+    private String buildStructuredContent(List<CleaningBlock> blocks) {
+        List<String> segments = new ArrayList<>();
+        for (CleaningBlock block : blocks) {
+            String segment = switch (block.type()) {
+                case NOISE -> "";
+                case HEADING -> formatHeading(block);
+                case CODE -> preserveCodeWhitespace(block.content());
+                default -> normalizeWhitespace(block.content());
+            };
+            if (segment.isBlank() || isNoiseLine(segment)) {
+                continue;
+            }
+            if (!segments.contains(segment)) {
+                segments.add(segment);
+            }
+        }
+        return String.join("\n", segments);
+    }
+
+    private String formatHeading(CleaningBlock block) {
+        int level = Math.max(2, block.level());
+        return "#".repeat(level) + " " + normalizeWhitespace(block.content());
+    }
+
+    private String preserveCodeWhitespace(String value) {
+        String normalized = value == null ? "" : value.replace("\r\n", "\n").replace('\r', '\n');
+        String[] lines = normalized.split("\n", -1);
+        List<String> keptLines = new ArrayList<>();
+        for (String line : lines) {
+            if (line.isBlank() && keptLines.isEmpty()) {
+                continue;
+            }
+            keptLines.add(line.replace('\u00A0', ' '));
+        }
+        while (!keptLines.isEmpty() && keptLines.get(keptLines.size() - 1).isBlank()) {
+            keptLines.remove(keptLines.size() - 1);
+        }
+        return String.join("\n", keptLines);
     }
 
     private void appendMeaningfulSegment(Set<String> segments, String rawText) {

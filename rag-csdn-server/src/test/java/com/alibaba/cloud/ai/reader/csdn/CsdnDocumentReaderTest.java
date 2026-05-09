@@ -170,4 +170,58 @@ class CsdnDocumentReaderTest {
         assertTrue(!text.contains("分享至微信"));
         assertTrue(!text.contains("目录"));
     }
+
+    @Test
+    void shouldPreserveCodeIndentationInStructuredCleaning() {
+        CsdnResource resource = new CsdnResource("https://blog.csdn.net/test_author/article/details/147000001");
+        CsdnDocumentReader reader = new CsdnDocumentReader(resource);
+
+        String html = """
+                <html>
+                  <body>
+                    <main>
+                      <div id="content_views">
+                        <pre><code>if (a &lt; b) {\n    return a;\n}</code></pre>
+                      </div>
+                    </main>
+                  </body>
+                </html>
+                """;
+
+        List<Document> documents = reader.parseDocuments(resource, html);
+
+        assertTrue(documents.get(0).getText().contains("    return a;"));
+    }
+
+    @Test
+    void shouldKeepHeadingMarkersInOptimizedContent() {
+        CsdnResource resource = new CsdnResource("https://blog.csdn.net/test_author/article/details/147000001");
+        CsdnDocumentReader reader = new CsdnDocumentReader(resource);
+
+        String html = """
+                <html>
+                  <head>
+                    <meta property="og:title" content="结构测试"/>
+                  </head>
+                  <body>
+                    <main>
+                      <div id="content_views">
+                        <h2>一、安装</h2>
+                        <p>安装说明</p>
+                        <h3>1.1 前置条件</h3>
+                        <p>准备 JDK 17</p>
+                      </div>
+                    </main>
+                  </body>
+                </html>
+                """;
+
+        List<Document> documents = reader.parseDocuments(resource, html);
+        String text = documents.get(0).getText();
+
+        assertTrue(text.contains("## 一、安装"));
+        assertTrue(text.contains("### 1.1 前置条件"));
+        assertTrue(text.contains("安装说明"));
+        assertTrue(text.contains("准备 JDK 17"));
+    }
 }
