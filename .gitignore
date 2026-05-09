@@ -10,6 +10,9 @@
 # VS Code
 /.vscode/
 
+# Local worktrees
+/.worktrees/
+
 # OS files
 .DS_Store
 Thumbs.db
