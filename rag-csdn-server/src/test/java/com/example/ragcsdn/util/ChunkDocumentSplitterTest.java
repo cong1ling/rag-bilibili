@@ -1,5 +1,8 @@
 package com.example.ragcsdn.util;
 
+import com.example.ragcsdn.cleaning.model.CleaningBlock;
+import com.example.ragcsdn.cleaning.model.CleaningBlockType;
+import com.example.ragcsdn.cleaning.model.NoiseLabel;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.transformer.splitter.TokenTextSplitter;
@@ -46,6 +49,21 @@ class ChunkDocumentSplitterTest {
         List<Document> result = splitter.split(List.of(new Document("source")));
 
         assertThat(result).extracting(Document::getText).containsExactly("abcdef", "ghijkl");
+    }
+
+    @Test
+    void shouldSplitStructuredBlocksWithBlockAwareChunker() {
+        TokenTextSplitter delegate = mock(TokenTextSplitter.class);
+        ChunkDocumentSplitter splitter = new ChunkDocumentSplitter(delegate, 0);
+
+        List<String> chunks = splitter.splitStructuredBlocks(List.of(
+                new CleaningBlock(CleaningBlockType.HEADING, "一、示例", 2, NoiseLabel.NONE),
+                new CleaningBlock(CleaningBlockType.CODE, "if (a < b) {\n    return a;\n}", 0, NoiseLabel.NONE)
+        ));
+
+        assertThat(chunks).hasSize(1);
+        assertThat(chunks.get(0)).contains("一、示例");
+        assertThat(chunks.get(0)).contains("    return a;");
     }
 }
 

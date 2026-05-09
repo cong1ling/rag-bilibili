@@ -1,5 +1,7 @@
 package com.example.ragcsdn.util;
 
+import com.example.ragcsdn.cleaning.BlockAwareChunker;
+import com.example.ragcsdn.cleaning.model.CleaningBlock;
 import com.example.ragcsdn.config.ChunkingProperties;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.transformer.splitter.TokenTextSplitter;
@@ -13,6 +15,7 @@ import java.util.List;
 public class ChunkDocumentSplitter {
 
     private final TokenTextSplitter delegate;
+    private final int chunkSize;
     private final int overlapChars;
 
     @Autowired
@@ -23,11 +26,16 @@ public class ChunkDocumentSplitter {
                 properties.getMinChunkLengthToEmbed(),
                 properties.getMaxNumChunks(),
                 properties.isKeepSeparator()
-        ), properties.getOverlapChars());
+        ), properties.getChunkSize(), properties.getOverlapChars());
     }
 
     ChunkDocumentSplitter(TokenTextSplitter delegate, int overlapChars) {
+        this(delegate, 512, overlapChars);
+    }
+
+    ChunkDocumentSplitter(TokenTextSplitter delegate, int chunkSize, int overlapChars) {
         this.delegate = delegate;
+        this.chunkSize = chunkSize;
         this.overlapChars = Math.max(0, overlapChars);
     }
 
@@ -54,6 +62,10 @@ public class ChunkDocumentSplitter {
             previousText = currentText;
         }
         return overlappedDocuments;
+    }
+
+    public List<String> splitStructuredBlocks(List<CleaningBlock> blocks) {
+        return new BlockAwareChunker(chunkSize).chunk(blocks);
     }
 
     private String mergeWithOverlap(String previousText, String currentText, int actualOverlap) {
