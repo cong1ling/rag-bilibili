@@ -2,6 +2,7 @@ package com.alibaba.cloud.ai.reader.csdn;
 
 import com.example.ragcsdn.cleaning.StructuredArticleCleaner;
 import com.example.ragcsdn.cleaning.model.CleaningBlock;
+import com.example.ragcsdn.cleaning.model.CleaningBlockType;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Element;
 import org.slf4j.Logger;
@@ -112,7 +113,8 @@ public class CsdnDocumentReader implements DocumentReader {
                 "script,style,noscript,button,svg,aside,.passport-login-container,.tool-box," +
                         ".recommend-box,.hide-article-box,.blog_extension_box,.article-copyright").remove();
 
-        String content = extractCleanContent(sanitizedContent);
+        List<CleaningBlock> structuredBlocks = structuredArticleCleaner.extractBlocks(sanitizedContent.outerHtml());
+        String content = extractCleanContent(sanitizedContent, structuredBlocks);
         if (content.isBlank()) {
             throw new IllegalStateException("文章正文为空或无法提取有效内容");
         }
@@ -141,6 +143,14 @@ public class CsdnDocumentReader implements DocumentReader {
         metadata.put("title", title);
         metadata.put("description", description);
         metadata.put("author", author);
+        metadata.put("structuredBlocks", structuredBlocks.stream()
+                .filter(block -> block.type() != CleaningBlockType.NOISE)
+                .map(block -> Map.<String, Object>of(
+                        "type", block.type().name(),
+                        "content", block.content(),
+                        "level", block.level(),
+                        "noiseLabel", block.noiseLabel().name()))
+                .toList());
         return List.of(new Document(documentText, metadata));
     }
 
@@ -273,8 +283,7 @@ public class CsdnDocumentReader implements DocumentReader {
         return "";
     }
 
-    private String extractCleanContent(Element contentElement) {
-        List<CleaningBlock> blocks = structuredArticleCleaner.extractBlocks(contentElement.outerHtml());
+    private String extractCleanContent(Element contentElement, List<CleaningBlock> blocks) {
         String structuredContent = buildStructuredContent(blocks);
         if (!structuredContent.isBlank()) {
             return structuredContent;

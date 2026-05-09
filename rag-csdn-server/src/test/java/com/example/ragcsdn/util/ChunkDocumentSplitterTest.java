@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.transformer.splitter.TokenTextSplitter;
 
+import java.util.Map;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -64,6 +65,27 @@ class ChunkDocumentSplitterTest {
         assertThat(chunks).hasSize(1);
         assertThat(chunks.get(0)).contains("一、示例");
         assertThat(chunks.get(0)).contains("    return a;");
+    }
+
+    @Test
+    void shouldUseStructuredBlocksMetadataDuringDocumentSplit() {
+        TokenTextSplitter delegate = mock(TokenTextSplitter.class);
+        ChunkDocumentSplitter splitter = new ChunkDocumentSplitter(delegate, 120, 0);
+
+        Document document = Document.builder()
+                .text("fallback text")
+                .metadata("structuredBlocks", List.of(
+                        Map.of("type", "HEADING", "content", "一、示例", "level", 2, "noiseLabel", "NONE"),
+                        Map.of("type", "CODE", "content", "if (a < b) {\n    return a;\n}", "level", 0, "noiseLabel", "NONE")
+                ))
+                .build();
+
+        List<Document> result = splitter.split(List.of(document));
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).getText()).contains("一、示例");
+        assertThat(result.get(0).getText()).contains("    return a;");
+        assertThat(result.get(0).getMetadata()).containsEntry("chunkMode", "structured");
     }
 }
 
