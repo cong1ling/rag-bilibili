@@ -88,6 +88,15 @@ rag:
     max-history: 10
     query-rewrite-enabled: true
     query-understanding-enabled: true
+    rule-routing-enabled: true
+    routing-observation-only: true
+    rule-routing-llm-fallback-enabled: true
+    ambiguity-threshold: 0.62
+    breadth-threshold: 0.58
+    complexity-threshold: 0.55
+    llm-fallback-confidence-threshold: 0.52
+    hyde-trigger-threshold: 0.72
+    decomposition-trigger-threshold: 0.68
     hyde-enabled: true
     decomposition-enabled: true
     max-decomposed-queries: 4

@@ -1,5 +1,6 @@
 package com.example.ragcsdn.service.impl;
 
+import com.example.ragcsdn.config.ChatOptimizationProperties;
 import com.example.ragcsdn.entity.Message;
 import com.example.ragcsdn.entity.Session;
 import com.example.ragcsdn.enums.MessageRole;
@@ -10,6 +11,7 @@ import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.document.Document;
 
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -56,6 +58,9 @@ class ChatServiceImplTest {
     private Method mergeHybridResults;
     private Method rerankDocuments;
     private Method determineTopK;
+    private Method shouldUseLlmFallback;
+    private Method shouldUseHyde;
+    private Method shouldUseDecomposition;
 
     /**
      * 每个测试方法执行前初始化：
@@ -84,6 +89,12 @@ class ChatServiceImplTest {
                 "rerankDocuments", String.class, List.class, int.class);
         determineTopK = ChatServiceImpl.class.getDeclaredMethod(
                 "determineTopK", Session.class, String.class);
+        shouldUseLlmFallback = ChatServiceImpl.class.getDeclaredMethod(
+                "shouldUseLlmFallback", double.class);
+        shouldUseHyde = ChatServiceImpl.class.getDeclaredMethod(
+                "shouldUseHyde", String.class, double.class);
+        shouldUseDecomposition = ChatServiceImpl.class.getDeclaredMethod(
+                "shouldUseDecomposition", String.class, double.class);
         // setAccessible(true) 允许在类外部调用私有方法
         buildMessageHistory.setAccessible(true);
         buildContext.setAccessible(true);
@@ -96,6 +107,13 @@ class ChatServiceImplTest {
         mergeHybridResults.setAccessible(true);
         rerankDocuments.setAccessible(true);
         determineTopK.setAccessible(true);
+        shouldUseLlmFallback.setAccessible(true);
+        shouldUseHyde.setAccessible(true);
+        shouldUseDecomposition.setAccessible(true);
+
+        ChatOptimizationProperties properties = defaultProperties();
+        setField("chatOptimizationProperties", properties);
+        setField("queryComplexityAnalyzer", new QueryComplexityAnalyzer(properties));
     }
 
     /**
@@ -156,6 +174,27 @@ class ChatServiceImplTest {
 
     private int invokeDetermineTopK(Session session, String query) throws Exception {
         return (int) determineTopK.invoke(chatService, session, query);
+    }
+
+    private void setField(String fieldName, Object value) throws Exception {
+        Field field = ChatServiceImpl.class.getDeclaredField(fieldName);
+        field.setAccessible(true);
+        field.set(chatService, value);
+    }
+
+    private ChatOptimizationProperties defaultProperties() {
+        ChatOptimizationProperties properties = new ChatOptimizationProperties();
+        properties.setRuleRoutingEnabled(true);
+        properties.setRoutingObservationOnly(true);
+        properties.setRuleRoutingLlmFallbackEnabled(true);
+        properties.setAmbiguityThreshold(0.62d);
+        properties.setBreadthThreshold(0.58d);
+        properties.setComplexityThreshold(0.55d);
+        properties.setLlmFallbackConfidenceThreshold(0.52d);
+        properties.setSimpleTopK(3);
+        properties.setNormalTopK(5);
+        properties.setComplexTopK(8);
+        return properties;
     }
 
     /**
@@ -455,6 +494,83 @@ class ChatServiceImplTest {
         int topK = invokeDetermineTopK(session, "Spring Boot 的自动配置机制介绍一下");
 
         assertThat(topK).isEqualTo(5);
+    }
+
+    @Test
+    void determineTopK_usesAnalyzerForSimpleQueries() throws Exception {
+        setField("chatOptimizationProperties", defaultProperties());
+        setField("queryComplexityAnalyzer", new QueryComplexityAnalyzer(defaultProperties()));
+
+        int topK = invokeDetermineTopK(null, "mysql 默认端口是多少");
+
+        assertThat(topK).isEqualTo(3);
+    }
+
+    @Test
+    void determineTopK_usesAnalyzerForBroadQueries() throws Exception {
+        setField("chatOptimizationProperties", defaultProperties());
+        setField("queryComplexityAnalyzer", new QueryComplexityAnalyzer(defaultProperties()));
+
+        int topK = invokeDetermineTopK(null, "分析 Spring AI 检索链路的流程、取舍与优化方式");
+
+        assertThat(topK).isEqualTo(8);
+    }
+
+    @Test
+    void ruleRouting_highConfidenceDirectQuery_skipsFallback() throws Exception {
+        ChatOptimizationProperties properties = defaultProperties();
+        properties.setRoutingObservationOnly(false);
+        setField("chatOptimizationProperties", properties);
+
+        boolean usedFallback = (boolean) shouldUseLlmFallback.invoke(chatService, 0.88d);
+
+        assertThat(usedFallback).isFalse();
+    }
+
+    @Test
+    void ruleRouting_lowConfidenceQuery_usesFallback() throws Exception {
+        ChatOptimizationProperties properties = defaultProperties();
+        properties.setRoutingObservationOnly(false);
+        setField("chatOptimizationProperties", properties);
+
+        boolean usedFallback = (boolean) shouldUseLlmFallback.invoke(chatService, 0.41d);
+
+        assertThat(usedFallback).isTrue();
+    }
+
+    @Test
+    void routeGuards_requireMatchingIntentAndThreshold() throws Exception {
+        ChatOptimizationProperties properties = defaultProperties();
+        properties.setRoutingObservationOnly(false);
+        properties.setHydeTriggerThreshold(0.72d);
+        properties.setDecompositionTriggerThreshold(0.68d);
+        setField("chatOptimizationProperties", properties);
+
+        boolean useHyde = (boolean) shouldUseHyde.invoke(chatService, "AMBIGUOUS", 0.80d);
+        boolean skipHyde = (boolean) shouldUseHyde.invoke(chatService, "DIRECT", 0.80d);
+        boolean useDecomposition = (boolean) shouldUseDecomposition.invoke(chatService, "BROAD", 0.78d);
+        boolean skipDecomposition = (boolean) shouldUseDecomposition.invoke(chatService, "DIRECT", 0.78d);
+
+        assertThat(useHyde).isTrue();
+        assertThat(skipHyde).isFalse();
+        assertThat(useDecomposition).isTrue();
+        assertThat(skipDecomposition).isFalse();
+    }
+
+    @Test
+    void hydeAndDecompositionThresholds_gateOnlyRelevantPaths() throws Exception {
+        ChatOptimizationProperties properties = defaultProperties();
+        properties.setRoutingObservationOnly(false);
+        properties.setHydeTriggerThreshold(0.72d);
+        properties.setDecompositionTriggerThreshold(0.68d);
+        setField("chatOptimizationProperties", properties);
+        setField("queryComplexityAnalyzer", new QueryComplexityAnalyzer(properties));
+
+        int broadTopK = invokeDetermineTopK(null, "分析 Spring AI 检索流程、对比方案与架构取舍");
+        int directTopK = invokeDetermineTopK(null, "mysql 默认端口是多少");
+
+        assertThat(broadTopK).isEqualTo(8);
+        assertThat(directTopK).isEqualTo(3);
     }
 }
 

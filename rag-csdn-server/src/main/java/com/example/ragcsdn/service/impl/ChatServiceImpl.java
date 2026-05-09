@@ -87,6 +87,9 @@ public class ChatServiceImpl implements ChatService {
     @Autowired
     private ChatOptimizationProperties chatOptimizationProperties;
 
+    @Autowired
+    private QueryComplexityAnalyzer queryComplexityAnalyzer;
+
     private enum QueryIntent {
         DIRECT,
         AMBIGUOUS,
@@ -112,6 +115,25 @@ public class ChatServiceImpl implements ChatService {
             String originalQuery,
             String rewrittenQuery,
             List<RetrievalQuery> retrievalQueries
+    ) {
+    }
+
+    private record RoutingAnalysis(
+            QueryIntent suggestedIntent,
+            double ambiguityScore,
+            double breadthScore,
+            double complexityScore,
+            double decisionConfidence,
+            boolean conversationDependent
+    ) {
+    }
+
+    private record QueryUnderstandingDecision(
+            QueryPlan queryPlan,
+            RoutingAnalysis routingAnalysis,
+            boolean usedLlmFallback,
+            boolean usedHyde,
+            boolean usedDecomposition
     ) {
     }
 
@@ -155,9 +177,22 @@ public class ChatServiceImpl implements ChatService {
                 ConversationMemory memory = buildConversationMemory(session, historyMessages, userMessage.getId());
 
                 // 7. Query 理解与检索路由
-                QueryPlan queryPlan = understandQuery(content, memory);
+                QueryUnderstandingDecision decision = understandQuery(content, memory);
+                QueryPlan queryPlan = decision.queryPlan();
                 List<Document> relevantDocs = retrieveRelevantDocuments(session, queryPlan, userId);
                 ResponseConfidence confidence = evaluateConfidence(relevantDocs);
+                int finalTopK = determineTopK(session, queryPlan.rewrittenQuery());
+                logRoutingDecision(
+                        queryPlan.originalQuery(),
+                        queryPlan.rewrittenQuery(),
+                        decision.routingAnalysis(),
+                        queryPlan.intent(),
+                        decision.usedLlmFallback(),
+                        decision.usedHyde(),
+                        decision.usedDecomposition(),
+                        finalTopK,
+                        relevantDocs.size()
+                );
 
                 // 8. 构建上下文
                 String context = buildContext(relevantDocs);
@@ -357,21 +392,39 @@ public class ChatServiceImpl implements ChatService {
         sessionMapper.updateSummary(sessionId, summary, LocalDateTime.now());
     }
 
-    private QueryPlan understandQuery(String query, ConversationMemory memory) {
+    private QueryUnderstandingDecision understandQuery(String query, ConversationMemory memory) {
         String rewrittenQuery = rewriteQuery(query, memory.recentMessages(), memory.summary());
         if (!isQueryUnderstandingEnabled()) {
-            return new QueryPlan(
+            QueryPlan directPlan = new QueryPlan(
                     QueryIntent.DIRECT,
                     query,
                     rewrittenQuery,
                     List.of(new RetrievalQuery(rewrittenQuery, rewrittenQuery, "direct"))
             );
+            return new QueryUnderstandingDecision(
+                    directPlan,
+                    new RoutingAnalysis(QueryIntent.DIRECT, 0.0d, 0.0d, 0.0d, 1.0d, false),
+                    false,
+                    false,
+                    false
+            );
         }
 
-        QueryIntent intent = classifyQuery(rewrittenQuery, memory);
-        if (intent == QueryIntent.AMBIGUOUS && isHydeEnabled()) {
+        RoutingAnalysis routingAnalysis = analyzeRouting(rewrittenQuery, memory);
+        QueryIntent intent = routingAnalysis.suggestedIntent();
+        boolean usedLlmFallback = shouldUseLlmFallback(routingAnalysis.decisionConfidence());
+        if (usedLlmFallback) {
+            intent = classifyQuery(rewrittenQuery, memory);
+        }
+
+        boolean usedHyde = false;
+        boolean usedDecomposition = false;
+        QueryPlan queryPlan;
+
+        if (shouldUseHyde(intent.name(), routingAnalysis.ambiguityScore())) {
+            usedHyde = true;
             String hydeDocument = generateHydeDocument(rewrittenQuery, memory);
-            return new QueryPlan(
+            queryPlan = new QueryPlan(
                     intent,
                     query,
                     rewrittenQuery,
@@ -380,12 +433,11 @@ public class ChatServiceImpl implements ChatService {
                             new RetrievalQuery(hydeDocument, null, "hyde")
                     )
             );
-        }
-
-        if (intent == QueryIntent.BROAD && isDecompositionEnabled()) {
+        } else if (shouldUseDecomposition(intent.name(), routingAnalysis.breadthScore())) {
             List<String> subQueries = decomposeQuery(rewrittenQuery, memory);
             if (subQueries.size() > 1) {
-                return new QueryPlan(
+                usedDecomposition = true;
+                queryPlan = new QueryPlan(
                         intent,
                         query,
                         rewrittenQuery,
@@ -393,14 +445,29 @@ public class ChatServiceImpl implements ChatService {
                                 .map(subQuery -> new RetrievalQuery(subQuery, subQuery, "subquery"))
                                 .collect(Collectors.toList())
                 );
+            } else {
+                queryPlan = new QueryPlan(
+                        intent,
+                        query,
+                        rewrittenQuery,
+                        List.of(new RetrievalQuery(rewrittenQuery, rewrittenQuery, "direct"))
+                );
             }
+        } else {
+            queryPlan = new QueryPlan(
+                    intent,
+                    query,
+                    rewrittenQuery,
+                    List.of(new RetrievalQuery(rewrittenQuery, rewrittenQuery, "direct"))
+            );
         }
 
-        return new QueryPlan(
-                QueryIntent.DIRECT,
-                query,
-                rewrittenQuery,
-                List.of(new RetrievalQuery(rewrittenQuery, rewrittenQuery, "direct"))
+        return new QueryUnderstandingDecision(
+                queryPlan,
+                routingAnalysis,
+                usedLlmFallback,
+                usedHyde,
+                usedDecomposition
         );
     }
 
@@ -1126,15 +1193,72 @@ public class ChatServiceImpl implements ChatService {
             return defaultTopK;
         }
 
-        List<String> keywords = extractKeywords(query);
-        String normalizedQuery = normalizeForMatch(query);
-        if (isComplexQuery(session, normalizedQuery, keywords)) {
+        RoutingAnalysis routingAnalysis = analyzeRouting(
+                query,
+                new ConversationMemory(List.of(), null, false)
+        );
+
+        if (routingAnalysis.complexityScore() >= getComplexityThreshold()
+                || routingAnalysis.suggestedIntent() != QueryIntent.DIRECT
+                || (session != null && SessionType.isAllArticles(session.getSessionType()))) {
             return getComplexTopK(defaultTopK);
         }
-        if (isSimpleFactQuery(normalizedQuery, keywords)) {
+        if (isSimpleFactQuery(normalizeForMatch(query), extractKeywords(query))
+                && routingAnalysis.complexityScore() < getComplexityThreshold()) {
             return getSimpleTopK(defaultTopK);
         }
         return getNormalTopK(defaultTopK);
+    }
+
+    private RoutingAnalysis analyzeRouting(String rewrittenQuery, ConversationMemory memory) {
+        boolean conversationDependent = rewrittenQuery != null
+                && rewrittenQuery.length() <= 24
+                && memory != null
+                && (!memory.recentMessages().isEmpty() || (memory.summary() != null && !memory.summary().isBlank()));
+
+        QueryComplexityAnalyzer.Analysis analysis =
+                queryComplexityAnalyzer.analyze(rewrittenQuery, conversationDependent);
+
+        QueryIntent suggestedIntent = switch (analysis.suggestedIntent()) {
+            case AMBIGUOUS -> QueryIntent.AMBIGUOUS;
+            case BROAD -> QueryIntent.BROAD;
+            case DIRECT -> QueryIntent.DIRECT;
+        };
+
+        return new RoutingAnalysis(
+                suggestedIntent,
+                analysis.ambiguityScore(),
+                analysis.breadthScore(),
+                analysis.complexityScore(),
+                analysis.decisionConfidence(),
+                conversationDependent
+        );
+    }
+
+    private void logRoutingDecision(String originalQuery, String rewrittenQuery, RoutingAnalysis routingAnalysis,
+                                    QueryIntent finalIntent, boolean usedLlmFallback,
+                                    boolean usedHyde, boolean usedDecomposition, int finalTopK, int retrievedDocCount) {
+        log.info(
+                "routing decision: originalQuery={}, rewrittenQuery={}, suggestedIntent={}, finalIntent={}, "
+                        + "ambiguityScore={}, breadthScore={}, complexityScore={}, decisionConfidence={}, "
+                        + "usedLlmFallback={}, usedHyde={}, usedDecomposition={}, finalTopK={}, retrievedDocCount={}, "
+                        + "ruleRoutingEnabled={}, routingObservationOnly={}",
+                originalQuery,
+                rewrittenQuery,
+                routingAnalysis.suggestedIntent(),
+                finalIntent,
+                routingAnalysis.ambiguityScore(),
+                routingAnalysis.breadthScore(),
+                routingAnalysis.complexityScore(),
+                routingAnalysis.decisionConfidence(),
+                usedLlmFallback,
+                usedHyde,
+                usedDecomposition,
+                finalTopK,
+                retrievedDocCount,
+                isRuleRoutingEnabled(),
+                isRoutingObservationOnly()
+        );
     }
 
     private boolean isSimpleFactQuery(String normalizedQuery, List<String> keywords) {
@@ -1333,6 +1457,71 @@ public class ChatServiceImpl implements ChatService {
 
     private boolean isDynamicTopKEnabled() {
         return chatOptimizationProperties == null || !Boolean.FALSE.equals(chatOptimizationProperties.getDynamicTopKEnabled());
+    }
+
+    private boolean shouldUseLlmFallback(double decisionConfidence) {
+        if (!isRuleRoutingEnabled() || isRoutingObservationOnly()) {
+            return true;
+        }
+        if (!isRuleRoutingLlmFallbackEnabled()) {
+            return false;
+        }
+        return decisionConfidence < getLlmFallbackConfidenceThreshold();
+    }
+
+    private boolean shouldUseHyde(String intentName, double ambiguityScore) {
+        return isHydeEnabled()
+                && "AMBIGUOUS".equals(intentName)
+                && ambiguityScore >= getHydeTriggerThreshold();
+    }
+
+    private boolean shouldUseDecomposition(String intentName, double breadthScore) {
+        return isDecompositionEnabled()
+                && "BROAD".equals(intentName)
+                && breadthScore >= getDecompositionTriggerThreshold();
+    }
+
+    private boolean isRuleRoutingEnabled() {
+        return chatOptimizationProperties == null
+                || !Boolean.FALSE.equals(chatOptimizationProperties.getRuleRoutingEnabled());
+    }
+
+    private boolean isRoutingObservationOnly() {
+        return chatOptimizationProperties != null
+                && Boolean.TRUE.equals(chatOptimizationProperties.getRoutingObservationOnly());
+    }
+
+    private double getComplexityThreshold() {
+        if (chatOptimizationProperties == null || chatOptimizationProperties.getComplexityThreshold() == null) {
+            return 0.55d;
+        }
+        return chatOptimizationProperties.getComplexityThreshold();
+    }
+
+    private boolean isRuleRoutingLlmFallbackEnabled() {
+        return chatOptimizationProperties == null
+                || !Boolean.FALSE.equals(chatOptimizationProperties.getRuleRoutingLlmFallbackEnabled());
+    }
+
+    private double getLlmFallbackConfidenceThreshold() {
+        if (chatOptimizationProperties == null || chatOptimizationProperties.getLlmFallbackConfidenceThreshold() == null) {
+            return 0.52d;
+        }
+        return chatOptimizationProperties.getLlmFallbackConfidenceThreshold();
+    }
+
+    private double getHydeTriggerThreshold() {
+        if (chatOptimizationProperties == null || chatOptimizationProperties.getHydeTriggerThreshold() == null) {
+            return 0.72d;
+        }
+        return chatOptimizationProperties.getHydeTriggerThreshold();
+    }
+
+    private double getDecompositionTriggerThreshold() {
+        if (chatOptimizationProperties == null || chatOptimizationProperties.getDecompositionTriggerThreshold() == null) {
+            return 0.68d;
+        }
+        return chatOptimizationProperties.getDecompositionTriggerThreshold();
     }
 
     private int getSimpleTopK(int fallback) {
