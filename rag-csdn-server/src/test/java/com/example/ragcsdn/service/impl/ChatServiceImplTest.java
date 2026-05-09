@@ -110,6 +110,10 @@ class ChatServiceImplTest {
         shouldUseLlmFallback.setAccessible(true);
         shouldUseHyde.setAccessible(true);
         shouldUseDecomposition.setAccessible(true);
+
+        ChatOptimizationProperties properties = defaultProperties();
+        setField("chatOptimizationProperties", properties);
+        setField("queryComplexityAnalyzer", new QueryComplexityAnalyzer(properties));
     }
 
     /**
@@ -551,6 +555,22 @@ class ChatServiceImplTest {
         assertThat(skipHyde).isFalse();
         assertThat(useDecomposition).isTrue();
         assertThat(skipDecomposition).isFalse();
+    }
+
+    @Test
+    void hydeAndDecompositionThresholds_gateOnlyRelevantPaths() throws Exception {
+        ChatOptimizationProperties properties = defaultProperties();
+        properties.setRoutingObservationOnly(false);
+        properties.setHydeTriggerThreshold(0.72d);
+        properties.setDecompositionTriggerThreshold(0.68d);
+        setField("chatOptimizationProperties", properties);
+        setField("queryComplexityAnalyzer", new QueryComplexityAnalyzer(properties));
+
+        int broadTopK = invokeDetermineTopK(null, "分析 Spring AI 检索流程、对比方案与架构取舍");
+        int directTopK = invokeDetermineTopK(null, "mysql 默认端口是多少");
+
+        assertThat(broadTopK).isEqualTo(8);
+        assertThat(directTopK).isEqualTo(3);
     }
 }
 
