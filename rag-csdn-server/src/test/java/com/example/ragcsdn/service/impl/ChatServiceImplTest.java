@@ -6,6 +6,8 @@ import com.example.ragcsdn.entity.Session;
 import com.example.ragcsdn.enums.MessageRole;
 import com.example.ragcsdn.enums.SessionType;
 import com.example.ragcsdn.service.chat.ChatPromptBuilder;
+import com.example.ragcsdn.service.chat.ConversationMemoryService;
+import com.example.ragcsdn.service.chat.QueryUnderstandingService;
 import com.example.ragcsdn.service.chat.ResponseConfidenceService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -118,6 +120,8 @@ class ChatServiceImplTest {
         setField("queryComplexityAnalyzer", new QueryComplexityAnalyzer(properties));
         setField("chatPromptBuilder", new ChatPromptBuilder());
         setField("responseConfidenceService", new ResponseConfidenceService());
+        setField("conversationMemoryService", new ConversationMemoryService());
+        setField("queryUnderstandingService", new QueryUnderstandingService(new QueryComplexityAnalyzer(properties)));
     }
 
     /**

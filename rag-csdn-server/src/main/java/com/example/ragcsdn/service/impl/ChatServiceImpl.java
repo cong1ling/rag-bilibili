@@ -19,7 +19,10 @@ import com.example.ragcsdn.mapper.MessageMapper;
 import com.example.ragcsdn.mapper.SessionMapper;
 import com.example.ragcsdn.mapper.ArticleMapper;
 import com.example.ragcsdn.service.ChatService;
+import com.example.ragcsdn.service.chat.ChatPromptTemplates;
 import com.example.ragcsdn.service.chat.ChatPromptBuilder;
+import com.example.ragcsdn.service.chat.ConversationMemoryService;
+import com.example.ragcsdn.service.chat.QueryUnderstandingService;
 import com.example.ragcsdn.service.chat.ResponseConfidenceService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -97,6 +100,12 @@ public class ChatServiceImpl implements ChatService {
 
     @Autowired
     private ResponseConfidenceService responseConfidenceService;
+
+    @Autowired
+    private ConversationMemoryService conversationMemoryService;
+
+    @Autowired
+    private QueryUnderstandingService queryUnderstandingService;
 
     private enum QueryIntent {
         DIRECT,
@@ -331,32 +340,17 @@ public class ChatServiceImpl implements ChatService {
     }
 
     private ConversationMemory buildConversationMemory(Session session, List<Message> messages, Long excludeId) {
-        List<Message> filtered = messages.stream()
-                .filter(m -> !m.getId().equals(excludeId))
-                .sorted(Comparator.comparing(Message::getCreateTime))
-                .collect(Collectors.toList());
-
-        if (!isSummaryEnabled() || filtered.size() <= getSummaryTriggerMessages()) {
-            return new ConversationMemory(
-                    buildMessageHistory(filtered, null),
-                    null,
-                    false
-            );
-        }
-
-        int recentCount = Math.min(getSummaryRecentMessages(), filtered.size());
-        List<Message> olderMessages = filtered.subList(0, filtered.size() - recentCount);
-        List<Message> recentMessages = filtered.subList(filtered.size() - recentCount, filtered.size());
-        String summary = session == null ? null : session.getConversationSummary();
-        if (summary == null || summary.isBlank()) {
-            summary = summarizeConversation(olderMessages);
-        }
-
-        return new ConversationMemory(
-                buildMessageHistory(recentMessages, null),
-                summary,
-                summary != null && !summary.isBlank()
+        ConversationMemoryService.ConversationMemory memory = conversationMemoryService.buildConversationMemory(
+                session,
+                messages,
+                excludeId,
+                getSummaryTriggerMessages(),
+                getSummaryRecentMessages(),
+                getMaxHistory(),
+                isSummaryEnabled(),
+                this::summarizeConversation
         );
+        return new ConversationMemory(memory.recentMessages(), memory.summary(), memory.summaryUsed());
     }
 
     private void refreshAndPersistConversationSummary(Long sessionId) {
@@ -463,17 +457,7 @@ public class ChatServiceImpl implements ChatService {
      */
     private List<org.springframework.ai.chat.messages.Message> buildMessageHistory(
             List<Message> messages, Long excludeId) {
-        List<Message> filtered = messages.stream()
-                .filter(m -> !m.getId().equals(excludeId))
-                .sorted(Comparator.comparing(Message::getCreateTime))
-                .collect(Collectors.toList());
-
-        int start = Math.max(0, filtered.size() - getMaxHistory());
-        return filtered.subList(start, filtered.size()).stream()
-                .map(m -> m.getRole().equals(MessageRole.USER.getCode())
-                        ? new UserMessage(m.getContent())
-                        : new AssistantMessage(m.getContent()))
-                .collect(Collectors.toList());
+        return conversationMemoryService.buildMessageHistory(messages, excludeId, getMaxHistory());
     }
 
     /**
@@ -499,16 +483,7 @@ public class ChatServiceImpl implements ChatService {
 
         try {
             String rewritten = chatClientBuilder.build().prompt()
-                    .system("""
-                            你是一个RAG检索查询改写助手。
-                            你的任务是结合对话历史，将用户当前问题改写为适合向量检索的独立查询。
-                            要求：
-                            1. 保留原问题意图，不要扩写无关信息
-                            2. 补全代词、省略和上下文指代
-                            3. 如果原问题已经独立完整，则原样返回
-                            4. 只输出最终查询，不要解释
-                            """
-                            + buildSummaryPrompt(memorySummary))
+                    .system(ChatPromptTemplates.QUERY_REWRITE_SYSTEM_PROMPT + buildSummaryPrompt(memorySummary))
                     .messages(historyMessages)
                     .user(query)
                     .call()
@@ -528,15 +503,7 @@ public class ChatServiceImpl implements ChatService {
     private QueryIntent classifyQuery(String query, ConversationMemory memory) {
         try {
             String result = chatClientBuilder.build().prompt()
-                    .system("""
-                            你是RAG查询路由器。
-                            请将用户问题只分类为以下三类之一：
-                            DIRECT：问题清晰明确，可直接检索。
-                            AMBIGUOUS：问题较短、语义不完整、存在指代或语义间隙，适合先做 HyDE。
-                            BROAD：问题范围宽，需要拆成3到5个互补子问题分别检索。
-                            只输出 DIRECT、AMBIGUOUS、BROAD 之一，不要解释。
-                            """
-                            + buildSummaryPrompt(memory.summary()))
+                    .system(ChatPromptTemplates.QUERY_INTENT_SYSTEM_PROMPT + buildSummaryPrompt(memory.summary()))
                     .messages(memory.recentMessages())
                     .user(query)
                     .call()
@@ -550,51 +517,25 @@ public class ChatServiceImpl implements ChatService {
     }
 
     private QueryIntent normalizeQueryIntent(String raw, String fallbackQuery) {
-        if (raw == null || raw.isBlank()) {
-            return inferQueryIntentHeuristically(fallbackQuery);
-        }
-
-        String normalized = raw.trim().toUpperCase(Locale.ROOT);
-        if (normalized.contains("AMBIGUOUS")) {
-            return QueryIntent.AMBIGUOUS;
-        }
-        if (normalized.contains("BROAD")) {
-            return QueryIntent.BROAD;
-        }
-        if (normalized.contains("DIRECT")) {
-            return QueryIntent.DIRECT;
-        }
-        return inferQueryIntentHeuristically(fallbackQuery);
+        return switch (queryUnderstandingService.normalizeQueryIntent(raw, fallbackQuery, false)) {
+            case AMBIGUOUS -> QueryIntent.AMBIGUOUS;
+            case BROAD -> QueryIntent.BROAD;
+            case DIRECT -> QueryIntent.DIRECT;
+        };
     }
 
     private QueryIntent inferQueryIntentHeuristically(String query) {
-        String normalized = normalizeForMatch(query);
-        if (normalized.isBlank()) {
-            return QueryIntent.DIRECT;
-        }
-
-        boolean ambiguousCue = normalized.matches(".*(它|这个|那个|这部分|这里|那里|上面|前面|后面|其|该|this|that|it|they).*");
-        boolean shortQuery = normalized.length() <= 18;
-        if (ambiguousCue && shortQuery) {
-            return QueryIntent.AMBIGUOUS;
-        }
-        if (isComplexQuery(null, normalized, extractKeywords(query))) {
-            return QueryIntent.BROAD;
-        }
-        return QueryIntent.DIRECT;
+        return switch (queryUnderstandingService.inferQueryIntentHeuristically(query, false)) {
+            case AMBIGUOUS -> QueryIntent.AMBIGUOUS;
+            case BROAD -> QueryIntent.BROAD;
+            case DIRECT -> QueryIntent.DIRECT;
+        };
     }
 
     private String generateHydeDocument(String query, ConversationMemory memory) {
         try {
             String hyde = chatClientBuilder.build().prompt()
-                    .system("""
-                            你是 HyDE 假设文档生成助手。
-                            请基于用户问题，生成一段适合用于向量检索的“理想答案式说明文”。
-                            要求：
-                            1. 120到200字
-                            2. 只写可能相关的知识描述，不要出现“假设”“可能”“我认为”
-                            3. 不要输出列表，不要解释任务
-                            """)
+                    .system(ChatPromptTemplates.HYDE_SYSTEM_PROMPT)
                     .messages(memory.recentMessages())
                     .user(query)
                     .call()
@@ -610,14 +551,7 @@ public class ChatServiceImpl implements ChatService {
     private List<String> decomposeQuery(String query, ConversationMemory memory) {
         try {
             String result = chatClientBuilder.build().prompt()
-                    .system("""
-                            你是复杂问题拆解助手。
-                            请将用户问题拆成3到5个互补、去重、可检索的子问题。
-                            要求：
-                            1. 每行一个子问题
-                            2. 子问题之间不要重复
-                            3. 只输出子问题列表，不要解释
-                            """)
+                    .system(ChatPromptTemplates.DECOMPOSITION_SYSTEM_PROMPT)
                     .messages(memory.recentMessages())
                     .user(query)
                     .call()
@@ -631,20 +565,7 @@ public class ChatServiceImpl implements ChatService {
     }
 
     private List<String> normalizeDecomposedQueries(String raw, String fallbackQuery) {
-        if (raw == null || raw.isBlank()) {
-            return List.of(fallbackQuery);
-        }
-
-        List<String> subQueries = raw.lines()
-                .map(String::trim)
-                .map(line -> line.replaceFirst("^[-*\\d.、)）\\s]+", ""))
-                .map(String::trim)
-                .filter(line -> !line.isBlank())
-                .distinct()
-                .limit(getMaxDecomposedQueries())
-                .collect(Collectors.toList());
-
-        return subQueries.isEmpty() ? List.of(fallbackQuery) : subQueries;
+        return queryUnderstandingService.normalizeDecomposedQueries(raw, fallbackQuery, getMaxDecomposedQueries());
     }
 
     private String summarizeConversation(List<Message> messages) {
@@ -658,14 +579,7 @@ public class ChatServiceImpl implements ChatService {
                     .collect(Collectors.joining("\n"));
 
             String summary = chatClientBuilder.build().prompt()
-                    .system("""
-                            你是对话记忆压缩助手。
-                            请将旧对话压缩为不超过150字的摘要，保留：
-                            1. 关键实体
-                            2. 已确认事实
-                            3. 仍在追问的主题
-                            只输出摘要，不要解释。
-                            """)
+                    .system(ChatPromptTemplates.SUMMARY_SYSTEM_PROMPT)
                     .user(transcript)
                     .call()
                     .content();
@@ -678,45 +592,15 @@ public class ChatServiceImpl implements ChatService {
     }
 
     private String normalizeConversationSummary(String summary, List<Message> messages) {
-        if (summary != null && !summary.isBlank()) {
-            String normalized = summary.trim().replaceAll("\\s+", " ");
-            return normalized.length() <= getSummaryMaxLength()
-                    ? normalized
-                    : normalized.substring(0, getSummaryMaxLength());
-        }
-
-        String fallback = messages.stream()
-                .skip(Math.max(0, messages.size() - 4))
-                .map(message -> message.getRole() + ":" + message.getContent())
-                .collect(Collectors.joining("；"));
-        if (fallback.length() <= getSummaryMaxLength()) {
-            return fallback;
-        }
-        return fallback.substring(0, getSummaryMaxLength());
+        return conversationMemoryService.normalizeConversationSummary(summary, messages, getSummaryMaxLength());
     }
 
     private String buildSummaryPrompt(String memorySummary) {
-        if (memorySummary == null || memorySummary.isBlank()) {
-            return "";
-        }
-        return "\n历史摘要如下，请在理解当前问题时参考，但不要把它当成检索证据：\n" + memorySummary + "\n";
+        return queryUnderstandingService.buildSummaryPrompt(memorySummary);
     }
 
     private String normalizeRewrittenQuery(String originalQuery, String rewritten) {
-        if (rewritten == null || rewritten.isBlank()) {
-            return originalQuery;
-        }
-
-        String normalized = rewritten.trim()
-                .replaceFirst("^(改写后的查询|改写后的问题|检索查询|重写后的问题)[:：]\\s*", "")
-                .trim();
-
-        if ((normalized.startsWith("\"") && normalized.endsWith("\""))
-                || (normalized.startsWith("“") && normalized.endsWith("”"))) {
-            normalized = normalized.substring(1, normalized.length() - 1).trim();
-        }
-
-        return normalized.isBlank() ? originalQuery : normalized;
+        return queryUnderstandingService.normalizeRewrittenQuery(originalQuery, rewritten);
     }
 
     private String buildSourceHeader(Document document, int fallbackIndex) {
