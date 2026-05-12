@@ -5,6 +5,8 @@ import com.example.ragcsdn.entity.Message;
 import com.example.ragcsdn.entity.Session;
 import com.example.ragcsdn.enums.MessageRole;
 import com.example.ragcsdn.enums.SessionType;
+import com.example.ragcsdn.service.chat.ChatPromptBuilder;
+import com.example.ragcsdn.service.chat.ResponseConfidenceService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -114,6 +116,8 @@ class ChatServiceImplTest {
         ChatOptimizationProperties properties = defaultProperties();
         setField("chatOptimizationProperties", properties);
         setField("queryComplexityAnalyzer", new QueryComplexityAnalyzer(properties));
+        setField("chatPromptBuilder", new ChatPromptBuilder());
+        setField("responseConfidenceService", new ResponseConfidenceService());
     }
 
     /**
@@ -573,4 +577,3 @@ class ChatServiceImplTest {
         assertThat(directTopK).isEqualTo(3);
     }
 }
-
