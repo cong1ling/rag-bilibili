@@ -1,11 +1,16 @@
 package com.example.ragcsdn.service.impl;
 
+import com.alibaba.cloud.ai.reader.csdn.CsdnArticleLink;
+import com.alibaba.cloud.ai.reader.csdn.CsdnDiscoveryReader;
+import com.example.ragcsdn.dto.request.ImportRecommendedArticlesRequest;
 import com.example.ragcsdn.dto.request.ImportArticleRequest;
 import com.example.ragcsdn.dto.request.RebuildArticleRequest;
 import com.example.ragcsdn.dto.response.ArticleResponse;
+import com.example.ragcsdn.dto.response.BatchImportResponse;
 import com.example.ragcsdn.entity.Article;
 import com.example.ragcsdn.enums.ArticleStatus;
 import com.example.ragcsdn.exception.BusinessException;
+import com.example.ragcsdn.exception.ErrorCode;
 import com.example.ragcsdn.mapper.ArticleMapper;
 import com.example.ragcsdn.mapper.ChunkMapper;
 import com.example.ragcsdn.mapper.MessageMapper;
@@ -219,5 +224,51 @@ class ArticleServiceImplTest {
         order.verify(dashVectorStore).delete(eq(List.of("vec-1", "vec-2")));
         order.verify(vectorMappingMapper).deleteByArticleId(9L);
         order.verify(chunkMapper).deleteByArticleId(9L);
+    }
+
+    @Test
+    void importRecommendedArticles_shouldTranslateUnexpectedDiscoveryFailure() {
+        ImportRecommendedArticlesRequest request = new ImportRecommendedArticlesRequest();
+        request.setLimit(3);
+
+        ArticleServiceImpl subject = new ArticleServiceImpl() {
+            @Override
+            CsdnDiscoveryReader newDiscoveryReader(String cookieHeader) {
+                throw new IllegalStateException("boom");
+            }
+        };
+        injectSharedDependencies(subject);
+        when(userService.getCsdnSessionCookie(1L)).thenReturn("cookie");
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> subject.importRecommendedArticles(request, 1L));
+
+        assertEquals(ErrorCode.VIDEO_IMPORT_FAILED.getCode(), error.getCode());
+        assertEquals("首页推荐文章抓取失败，请稍后重试", error.getMessage());
+    }
+
+    private void injectSharedDependencies(ArticleServiceImpl subject) {
+        setField(subject, "articleMapper", articleMapper);
+        setField(subject, "chunkMapper", chunkMapper);
+        setField(subject, "vectorMappingMapper", vectorMappingMapper);
+        setField(subject, "sessionMapper", sessionMapper);
+        setField(subject, "messageMapper", messageMapper);
+        setField(subject, "chunkDocumentSplitter", chunkDocumentSplitter);
+        setField(subject, "dashVectorStore", dashVectorStore);
+        setField(subject, "userService", userService);
+        setField(subject, "articleResponseAssembler", articleResponseAssembler);
+        setField(subject, "batchImportResponseAssembler", batchImportResponseAssembler);
+        setField(subject, "articleImportFailureHandler", articleImportFailureHandler);
+        setField(subject, "articleImportTaskExecutor", articleImportTaskExecutor);
+    }
+
+    private void setField(ArticleServiceImpl subject, String fieldName, Object value) {
+        try {
+            java.lang.reflect.Field field = ArticleServiceImpl.class.getDeclaredField(fieldName);
+            field.setAccessible(true);
+            field.set(subject, value);
+        } catch (ReflectiveOperationException ex) {
+            throw new RuntimeException(ex);
+        }
     }
 }

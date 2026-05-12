@@ -94,7 +94,7 @@ public class ArticleServiceImpl implements ArticleService {
     public BatchImportResponse importAuthorArticles(ImportAuthorArticlesRequest request, Long userId) {
         try {
             String csdnSessionCookie = userService.getCsdnSessionCookie(userId);
-            CsdnDiscoveryReader discoveryReader = new CsdnDiscoveryReader(csdnSessionCookie);
+            CsdnDiscoveryReader discoveryReader = newDiscoveryReader(csdnSessionCookie);
             List<CsdnArticleLink> links = discoveryReader.discoverAuthorArticles(
                     request.getAuthorUrl(),
                     request.getMaxArticles(),
@@ -116,7 +116,7 @@ public class ArticleServiceImpl implements ArticleService {
     public BatchImportResponse importRecommendedArticles(ImportRecommendedArticlesRequest request, Long userId) {
         try {
             String csdnSessionCookie = userService.getCsdnSessionCookie(userId);
-            CsdnDiscoveryReader discoveryReader = new CsdnDiscoveryReader(csdnSessionCookie);
+            CsdnDiscoveryReader discoveryReader = newDiscoveryReader(csdnSessionCookie);
             List<CsdnArticleLink> links = discoveryReader.discoverRecommendedArticles(request.getLimit());
             if (links.isEmpty()) {
                 throw new BusinessException(ErrorCode.PARAM_ERROR.getCode(), "当前未发现可导入的公开推荐文章");
@@ -128,6 +128,10 @@ public class ArticleServiceImpl implements ArticleService {
             log.error("批量导入推荐文章失败: userId={}", userId, ex);
             throw new BusinessException(ErrorCode.VIDEO_IMPORT_FAILED.getCode(), "首页推荐文章抓取失败，请稍后重试");
         }
+    }
+
+    CsdnDiscoveryReader newDiscoveryReader(String cookieHeader) {
+        return new CsdnDiscoveryReader(cookieHeader);
     }
 
     private ArticleResponse importSingleArticle(String articleUrl, Long userId) {

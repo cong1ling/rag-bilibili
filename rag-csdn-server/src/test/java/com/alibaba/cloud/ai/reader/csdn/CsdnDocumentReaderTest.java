@@ -224,4 +224,21 @@ class CsdnDocumentReaderTest {
         assertTrue(text.contains("安装说明"));
         assertTrue(text.contains("准备 JDK 17"));
     }
+
+    @Test
+    void parseDocuments_shouldKeepNoiseFilteringAndHeadingFormattingStable() {
+        CsdnResource resource = new CsdnResource("https://blog.csdn.net/test_author/article/details/147000001");
+        CsdnDocumentReader reader = new CsdnDocumentReader(resource);
+
+        String html = """
+                <html><body><main><div id="content_views">
+                  <h2>安装</h2><p>目录</p><p>保留正文</p>
+                </div></main></body></html>
+                """;
+
+        List<Document> documents = reader.parseDocuments(resource, html);
+
+        assertTrue(documents.get(0).getText().contains("## 安装"));
+        assertTrue(!documents.get(0).getText().contains("目录"));
+    }
 }

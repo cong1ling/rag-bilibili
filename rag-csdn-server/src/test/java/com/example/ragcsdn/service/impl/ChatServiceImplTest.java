@@ -576,4 +576,15 @@ class ChatServiceImplTest {
         assertThat(broadTopK).isEqualTo(8);
         assertThat(directTopK).isEqualTo(3);
     }
+
+    @Test
+    void buildContext_shouldDelegatePromptFormattingWithoutChangingSourceHeaderDefaults() throws Exception {
+        List<Document> documents = List.of(doc("正文", "标题A", "sid-1", 0, 2, 0.88d));
+
+        String context = invokeBuildContext(documents);
+
+        assertThat(context).contains("文章: 标题A");
+        assertThat(context).contains("标识: sid-1");
+        assertThat(context).contains("相似度: 0.880");
+    }
 }
