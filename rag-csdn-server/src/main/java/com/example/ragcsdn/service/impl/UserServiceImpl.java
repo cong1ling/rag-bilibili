@@ -9,13 +9,14 @@ import com.example.ragcsdn.exception.BusinessException;
 import com.example.ragcsdn.exception.ErrorCode;
 import com.example.ragcsdn.mapper.UserMapper;
 import com.example.ragcsdn.service.UserService;
+import com.example.ragcsdn.service.user.CsdnCookieNormalizer;
+import com.example.ragcsdn.service.user.UserResponseAssembler;
 import com.example.ragcsdn.util.CredentialCryptoService;
 import com.example.ragcsdn.util.PasswordEncoder;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 
 @Service
 public class UserServiceImpl implements UserService {
@@ -25,7 +26,11 @@ public class UserServiceImpl implements UserService {
     @Autowired
     private CredentialCryptoService credentialCryptoService;
 
-    private static final DateTimeFormatter FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+    @Autowired
+    private CsdnCookieNormalizer csdnCookieNormalizer;
+
+    @Autowired
+    private UserResponseAssembler userResponseAssembler;
 
     @Override
     public UserResponse register(RegisterRequest request) {
@@ -44,7 +49,7 @@ public class UserServiceImpl implements UserService {
         // 插入数据库
         userMapper.insert(user);
 
-        return convertToResponse(user);
+        return userResponseAssembler.toResponse(user);
     }
 
     @Override
@@ -60,7 +65,7 @@ public class UserServiceImpl implements UserService {
             throw new BusinessException(ErrorCode.PASSWORD_ERROR);
         }
 
-        return convertToResponse(user);
+        return userResponseAssembler.toResponse(user);
     }
 
     @Override
@@ -71,20 +76,20 @@ public class UserServiceImpl implements UserService {
 
     @Override
     public UserResponse getCurrentUser(Long userId) {
-        return convertToResponse(requireUser(userId));
+        return userResponseAssembler.toResponse(requireUser(userId));
     }
 
     @Override
     public UserResponse saveCsdnSession(UpdateCsdnSessionRequest request, Long userId) {
         User user = requireUser(userId);
-        String normalizedCookie = normalizeCookie(request.getCookie());
+        String normalizedCookie = csdnCookieNormalizer.normalize(request.getCookie());
         String encryptedCookie = credentialCryptoService.encrypt(normalizedCookie);
         LocalDateTime now = LocalDateTime.now();
 
         userMapper.updateCsdnCookie(userId, encryptedCookie, now);
         user.setCsdnCookieEncrypted(encryptedCookie);
         user.setCsdnCookieUpdateTime(now);
-        return convertToResponse(user);
+        return userResponseAssembler.toResponse(user);
     }
 
     @Override
@@ -93,7 +98,7 @@ public class UserServiceImpl implements UserService {
         userMapper.updateCsdnCookie(userId, null, null);
         user.setCsdnCookieEncrypted(null);
         user.setCsdnCookieUpdateTime(null);
-        return convertToResponse(user);
+        return userResponseAssembler.toResponse(user);
     }
 
     @Override
@@ -113,38 +118,4 @@ public class UserServiceImpl implements UserService {
         return user;
     }
 
-    private String normalizeCookie(String rawCookie) {
-        if (rawCookie == null || rawCookie.isBlank()) {
-            throw new BusinessException(ErrorCode.CSDN_SESSION_INVALID);
-        }
-
-        String normalized = rawCookie.trim();
-        if (normalized.regionMatches(true, 0, "Cookie:", 0, "Cookie:".length())) {
-            normalized = normalized.substring("Cookie:".length()).trim();
-        }
-
-        normalized = normalized.replace("\r\n", "; ")
-                .replace('\n', ';')
-                .replace('\r', ';')
-                .replaceAll("\\s*;\\s*", "; ")
-                .trim();
-
-        if (normalized.isBlank() || !normalized.contains("=")) {
-            throw new BusinessException(ErrorCode.CSDN_SESSION_INVALID);
-        }
-        return normalized;
-    }
-
-    private UserResponse convertToResponse(User user) {
-        UserResponse response = new UserResponse();
-        response.setId(user.getId());
-        response.setUsername(user.getUsername());
-        response.setCreateTime(user.getCreateTime().format(FORMATTER));
-        response.setHasCsdnSession(user.getCsdnCookieEncrypted() != null && !user.getCsdnCookieEncrypted().isBlank());
-        if (user.getCsdnCookieUpdateTime() != null) {
-            response.setCsdnSessionUpdateTime(user.getCsdnCookieUpdateTime().format(FORMATTER));
-        }
-        return response;
-    }
 }
-

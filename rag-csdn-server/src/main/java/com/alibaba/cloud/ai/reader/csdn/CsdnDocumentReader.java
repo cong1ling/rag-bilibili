@@ -41,6 +41,8 @@ public class CsdnDocumentReader implements DocumentReader {
     private final HttpClient httpClient;
     private final String cookieHeader;
     private final StructuredArticleCleaner structuredArticleCleaner;
+    private final CsdnAccessBlockDetector accessBlockDetector;
+    private final CsdnDocumentMetadataBuilder metadataBuilder;
 
     public CsdnDocumentReader(CsdnResource csdnResource) {
         this(csdnResource, null);
@@ -52,6 +54,8 @@ public class CsdnDocumentReader implements DocumentReader {
         this.httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build();
         this.cookieHeader = cookieHeader;
         this.structuredArticleCleaner = new StructuredArticleCleaner();
+        this.accessBlockDetector = new CsdnAccessBlockDetector();
+        this.metadataBuilder = new CsdnDocumentMetadataBuilder();
     }
 
     public CsdnDocumentReader(List<CsdnResource> csdnResourceList) {
@@ -64,6 +68,8 @@ public class CsdnDocumentReader implements DocumentReader {
         this.httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build();
         this.cookieHeader = cookieHeader;
         this.structuredArticleCleaner = new StructuredArticleCleaner();
+        this.accessBlockDetector = new CsdnAccessBlockDetector();
+        this.metadataBuilder = new CsdnDocumentMetadataBuilder();
     }
 
     @Override
@@ -100,7 +106,7 @@ public class CsdnDocumentReader implements DocumentReader {
                 text(page, "h1"));
 
         Element contentElement = findContentElement(page);
-        String accessBlockedReason = detectAccessBlocked(page, contentElement);
+        String accessBlockedReason = accessBlockDetector.detect(page, contentElement);
         if (!accessBlockedReason.isBlank()) {
             throw new IllegalStateException(accessBlockedReason);
         }
@@ -136,21 +142,14 @@ public class CsdnDocumentReader implements DocumentReader {
                 title,
                 content);
 
-        Map<String, Object> metadata = new HashMap<>();
-        metadata.put("sourceId", resource.getArticleId());
-        metadata.put("sourceUrl", canonicalUrl);
-        metadata.put("document_type", "content");
-        metadata.put("title", title);
-        metadata.put("description", description);
-        metadata.put("author", author);
-        metadata.put("structuredBlocks", structuredBlocks.stream()
-                .filter(block -> block.type() != CleaningBlockType.NOISE)
-                .map(block -> Map.<String, Object>of(
-                        "type", block.type().name(),
-                        "content", block.content(),
-                        "level", block.level(),
-                        "noiseLabel", block.noiseLabel().name()))
-                .toList());
+        Map<String, Object> metadata = metadataBuilder.build(
+                resource,
+                canonicalUrl,
+                title,
+                description,
+                author,
+                structuredBlocks
+        );
         return List.of(new Document(documentText, metadata));
     }
 
@@ -260,29 +259,6 @@ public class CsdnDocumentReader implements DocumentReader {
         return null;
     }
 
-    private String detectAccessBlocked(org.jsoup.nodes.Document page, Element contentElement) {
-        String pageText = normalizeWhitespace(page.text()).toLowerCase();
-        String title = normalizeWhitespace(page.title()).toLowerCase();
-        boolean hasLoginGate = page.selectFirst(".passport-login-container,.passport-login-tip,.hljs-button.signin") != null;
-        boolean hasVerifyText = containsAny(pageText,
-                "访问校验",
-                "请完成访问校验",
-                "验证码",
-                "安全验证",
-                "登录后您可以享受更多权益",
-                "登录后可查看全文");
-        boolean looksBlocked = hasLoginGate || containsAny(title, "访问校验", "安全验证");
-
-        if (looksBlocked || hasVerifyText) {
-            return "CSDN返回了登录或访问校验页面，请稍后重试，或更新可用的 CSDN Cookie";
-        }
-
-        if (contentElement == null && containsAny(pageText, "阅读全文", "展开阅读全文", "登录后可查看")) {
-            return "当前文章未返回可解析正文，可能需要有效的 CSDN Cookie 或稍后重试";
-        }
-        return "";
-    }
-
     private String extractCleanContent(Element contentElement, List<CleaningBlock> blocks) {
         String structuredContent = buildStructuredContent(blocks);
         if (!structuredContent.isBlank()) {
@@ -381,15 +357,6 @@ public class CsdnDocumentReader implements DocumentReader {
                 || text.startsWith("版权声明:")
                 || text.startsWith("文章标签：")
                 || text.startsWith("文章标签:");
-    }
-
-    private boolean containsAny(String value, String... candidates) {
-        for (String candidate : candidates) {
-            if (value.contains(candidate.toLowerCase())) {
-                return true;
-            }
-        }
-        return false;
     }
 
     private String text(org.jsoup.nodes.Document page, String selector) {

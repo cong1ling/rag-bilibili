@@ -10,7 +10,6 @@ import com.example.ragcsdn.dto.request.ImportAuthorArticlesRequest;
 import com.example.ragcsdn.dto.request.ImportRecommendedArticlesRequest;
 import com.example.ragcsdn.dto.request.RebuildArticleRequest;
 import com.example.ragcsdn.dto.response.ArticleResponse;
-import com.example.ragcsdn.dto.response.BatchImportItemResponse;
 import com.example.ragcsdn.dto.response.BatchImportResponse;
 import com.example.ragcsdn.entity.Article;
 import com.example.ragcsdn.entity.Chunk;
@@ -21,6 +20,9 @@ import com.example.ragcsdn.exception.ErrorCode;
 import com.example.ragcsdn.mapper.*;
 import com.example.ragcsdn.service.ArticleService;
 import com.example.ragcsdn.service.UserService;
+import com.example.ragcsdn.service.article.ArticleImportFailureHandler;
+import com.example.ragcsdn.service.article.ArticleResponseAssembler;
+import com.example.ragcsdn.service.article.BatchImportResponseAssembler;
 import com.example.ragcsdn.util.ChunkDocumentSplitter;
 import com.example.ragcsdn.util.CsdnArticleUrlParser;
 import com.example.ragcsdn.util.CsdnAuthorUrlParser;
@@ -35,7 +37,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -68,16 +69,20 @@ public class ArticleServiceImpl implements ArticleService {
     private DashVectorStore dashVectorStore;
 
     @Autowired
-    private ArticleStatusWriter articleStatusWriter;
+    private UserService userService;
 
     @Autowired
-    private UserService userService;
+    private ArticleResponseAssembler articleResponseAssembler;
+
+    @Autowired
+    private BatchImportResponseAssembler batchImportResponseAssembler;
+
+    @Autowired
+    private ArticleImportFailureHandler articleImportFailureHandler;
 
     @Autowired
     @Qualifier("articleImportTaskExecutor")
     private TaskExecutor articleImportTaskExecutor;
-
-    private static final DateTimeFormatter FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     @Override
     @Transactional
@@ -160,7 +165,7 @@ public class ArticleServiceImpl implements ArticleService {
                 sourceId,
                 false));
 
-        return convertToResponse(article);
+        return articleResponseAssembler.toResponse(article);
     }
 
     private ArticleResponse retryFailedArticle(Article article, String normalizedArticleUrl, Long userId) {
@@ -179,53 +184,26 @@ public class ArticleServiceImpl implements ArticleService {
                 article.getSourceId(),
                 true));
 
-        return convertToResponse(article);
+        return articleResponseAssembler.toResponse(article);
     }
 
     private BatchImportResponse batchImportArticles(String mode, String target, List<CsdnArticleLink> links, Long userId) {
-        BatchImportResponse response = new BatchImportResponse();
-        response.setMode(mode);
-        response.setTarget(target);
-        response.setDiscoveredCount(links.size());
-
-        int submittedCount = 0;
-        int duplicateCount = 0;
-        int failedCount = 0;
+        BatchImportResponse response = batchImportResponseAssembler.newResponse(mode, target, links.size());
 
         for (CsdnArticleLink link : links) {
-            BatchImportItemResponse item = new BatchImportItemResponse();
-            item.setSourceId(link.sourceId());
-            item.setSourceUrl(link.sourceUrl());
-            item.setTitle(link.title());
-
             try {
                 ArticleResponse imported = importSingleArticle(link.sourceUrl(), userId);
-                item.setArticleId(imported.getId());
-                item.setStatus("SUBMITTED");
-                item.setMessage("已提交导入任务");
-                submittedCount++;
+                batchImportResponseAssembler.addSubmitted(response, link, imported);
             } catch (BusinessException ex) {
                 if (isDuplicateArticle(ex)) {
-                    item.setStatus("SKIPPED_DUPLICATE");
-                    item.setMessage(ex.getMessage());
-                    duplicateCount++;
+                    batchImportResponseAssembler.addDuplicate(response, link, ex.getMessage());
                 } else {
-                    item.setStatus("FAILED");
-                    item.setMessage(ex.getMessage());
-                    failedCount++;
+                    batchImportResponseAssembler.addFailure(response, link, ex.getMessage());
                 }
             } catch (Exception ex) {
-                item.setStatus("FAILED");
-                item.setMessage(Objects.requireNonNullElse(ex.getMessage(), "批量导入失败"));
-                failedCount++;
+                batchImportResponseAssembler.addFailure(response, link, Objects.requireNonNullElse(ex.getMessage(), "批量导入失败"));
             }
-
-            response.getItems().add(item);
         }
-
-        response.setSubmittedCount(submittedCount);
-        response.setDuplicateCount(duplicateCount);
-        response.setFailedCount(failedCount);
         return response;
     }
 
@@ -258,7 +236,7 @@ public class ArticleServiceImpl implements ArticleService {
                 article.getSourceId(),
                 true));
 
-        return convertToResponse(article);
+        return articleResponseAssembler.toResponse(article);
     }
 
     /**
@@ -381,17 +359,14 @@ public class ArticleServiceImpl implements ArticleService {
     }
 
     private void markArticleFailed(Long articleId, String reason) {
-        Article article = articleMapper.selectById(articleId);
-        if (article != null) {
-            articleStatusWriter.markFailed(article, reason);
-        }
+        articleImportFailureHandler.markFailed(articleId, reason);
     }
 
     @Override
     public List<ArticleResponse> listArticles(Long userId) {
         List<Article> articles = articleMapper.selectByUserId(userId);
         return articles.stream()
-                .map(this::convertToResponse)
+                .map(articleResponseAssembler::toResponse)
                 .collect(Collectors.toList());
     }
 
@@ -401,7 +376,7 @@ public class ArticleServiceImpl implements ArticleService {
         if (article == null || !article.getUserId().equals(userId)) {
             throw new BusinessException(ErrorCode.VIDEO_NOT_FOUND);
         }
-        return convertToResponse(article);
+        return articleResponseAssembler.toResponse(article);
     }
 
     @Override
@@ -450,24 +425,4 @@ public class ArticleServiceImpl implements ArticleService {
         }
     }
 
-    private ArticleResponse convertToResponse(Article article) {
-        ArticleResponse response = new ArticleResponse();
-        response.setId(article.getId());
-        response.setSourceId(article.getSourceId());
-        response.setSourceUrl(article.getSourceUrl());
-        response.setTitle(article.getTitle());
-        response.setDescription(article.getDescription());
-        if (article.getImportTime() != null) {
-            response.setImportTime(article.getImportTime().format(FORMATTER));
-        }
-        response.setStatus(article.getStatus());
-        response.setFailReason(article.getFailReason());
-
-        // 查询分片数量
-        int chunkCount = chunkMapper.countByArticleId(article.getId());
-        response.setChunkCount(chunkCount);
-
-        return response;
-    }
 }
-

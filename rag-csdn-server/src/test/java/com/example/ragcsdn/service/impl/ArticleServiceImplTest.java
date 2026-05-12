@@ -11,6 +11,10 @@ import com.example.ragcsdn.mapper.ChunkMapper;
 import com.example.ragcsdn.mapper.MessageMapper;
 import com.example.ragcsdn.mapper.SessionMapper;
 import com.example.ragcsdn.mapper.VectorMappingMapper;
+import com.example.ragcsdn.service.UserService;
+import com.example.ragcsdn.service.article.ArticleImportFailureHandler;
+import com.example.ragcsdn.service.article.ArticleResponseAssembler;
+import com.example.ragcsdn.service.article.BatchImportResponseAssembler;
 import com.example.ragcsdn.util.ChunkDocumentSplitter;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -61,7 +65,16 @@ class ArticleServiceImplTest {
     private DashVectorStore dashVectorStore;
 
     @Mock
-    private ArticleStatusWriter articleStatusWriter;
+    private UserService userService;
+
+    @Mock
+    private ArticleResponseAssembler articleResponseAssembler;
+
+    @Mock
+    private BatchImportResponseAssembler batchImportResponseAssembler;
+
+    @Mock
+    private ArticleImportFailureHandler articleImportFailureHandler;
 
     @Mock
     private TaskExecutor articleImportTaskExecutor;
@@ -86,7 +99,13 @@ class ArticleServiceImplTest {
             return 1;
         }).when(articleMapper).insert(any(Article.class));
 
-        when(chunkMapper.countByArticleId(100L)).thenReturn(0);
+        when(articleResponseAssembler.toResponse(any(Article.class))).thenAnswer(invocation -> {
+            Article article = invocation.getArgument(0);
+            ArticleResponse response = new ArticleResponse();
+            response.setId(article.getId());
+            response.setStatus(article.getStatus());
+            return response;
+        });
         doNothing().when(articleImportTaskExecutor).execute(any(Runnable.class));
 
         ArticleResponse response = articleService.importArticle(request, 1L);
@@ -138,7 +157,13 @@ class ArticleServiceImplTest {
         failedArticle.setFailReason("deadline exceeded");
 
         when(articleMapper.selectByUserIdAndSourceId(1L, "147000001")).thenReturn(failedArticle);
-        when(chunkMapper.countByArticleId(100L)).thenReturn(0);
+        when(articleResponseAssembler.toResponse(any(Article.class))).thenAnswer(invocation -> {
+            Article article = invocation.getArgument(0);
+            ArticleResponse response = new ArticleResponse();
+            response.setId(article.getId());
+            response.setStatus(article.getStatus());
+            return response;
+        });
         doNothing().when(articleImportTaskExecutor).execute(any(Runnable.class));
 
         ArticleResponse response = articleService.importArticle(request, 1L);
@@ -164,7 +189,13 @@ class ArticleServiceImplTest {
         article.setStatus(ArticleStatus.SUCCESS.getCode());
 
         when(articleMapper.selectById(100L)).thenReturn(article);
-        when(chunkMapper.countByArticleId(100L)).thenReturn(12);
+        when(articleResponseAssembler.toResponse(any(Article.class))).thenAnswer(invocation -> {
+            Article current = invocation.getArgument(0);
+            ArticleResponse response = new ArticleResponse();
+            response.setId(current.getId());
+            response.setStatus(current.getStatus());
+            return response;
+        });
         doNothing().when(articleImportTaskExecutor).execute(any(Runnable.class));
 
         ArticleResponse response = articleService.rebuildArticle(100L, request, 1L);
@@ -190,4 +221,3 @@ class ArticleServiceImplTest {
         order.verify(chunkMapper).deleteByArticleId(9L);
     }
 }
-

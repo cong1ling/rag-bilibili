@@ -19,6 +19,8 @@ import com.example.ragcsdn.mapper.MessageMapper;
 import com.example.ragcsdn.mapper.SessionMapper;
 import com.example.ragcsdn.mapper.ArticleMapper;
 import com.example.ragcsdn.service.ChatService;
+import com.example.ragcsdn.service.chat.ChatPromptBuilder;
+import com.example.ragcsdn.service.chat.ResponseConfidenceService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -90,6 +92,12 @@ public class ChatServiceImpl implements ChatService {
     @Autowired
     private QueryComplexityAnalyzer queryComplexityAnalyzer;
 
+    @Autowired
+    private ChatPromptBuilder chatPromptBuilder;
+
+    @Autowired
+    private ResponseConfidenceService responseConfidenceService;
+
     private enum QueryIntent {
         DIRECT,
         AMBIGUOUS,
@@ -137,13 +145,6 @@ public class ChatServiceImpl implements ChatService {
     ) {
     }
 
-    private record ResponseConfidence(
-            String label,
-            double score,
-            boolean knowledgeGap
-    ) {
-    }
-
     @Override
     public SseEmitter streamMessage(Long sessionId, String content, Long userId) {
         // 1. 验证会话
@@ -180,7 +181,7 @@ public class ChatServiceImpl implements ChatService {
                 QueryUnderstandingDecision decision = understandQuery(content, memory);
                 QueryPlan queryPlan = decision.queryPlan();
                 List<Document> relevantDocs = retrieveRelevantDocuments(session, queryPlan, userId);
-                ResponseConfidence confidence = evaluateConfidence(relevantDocs);
+                ResponseConfidenceService.ResponseConfidence confidence = evaluateConfidence(relevantDocs);
                 int finalTopK = determineTopK(session, queryPlan.rewrittenQuery());
                 logRoutingDecision(
                         queryPlan.originalQuery(),
@@ -326,21 +327,7 @@ public class ChatServiceImpl implements ChatService {
      * 构建上下文
      */
     private String buildContext(List<Document> documents) {
-        if (documents.isEmpty()) {
-            return "没有找到相关的文章内容。";
-        }
-
-        StringBuilder context = new StringBuilder();
-        context.append("以下是检索到的相关文章片段，请优先依据片段头部的来源信息进行回答：\n\n");
-
-        for (int i = 0; i < documents.size(); i++) {
-            Document doc = documents.get(i);
-            context.append(buildSourceHeader(doc, i + 1)).append("\n");
-            context.append(doc.getText());
-            context.append("\n\n");
-        }
-
-        return context.toString();
+        return chatPromptBuilder.buildContext(documents);
     }
 
     private ConversationMemory buildConversationMemory(Session session, List<Message> messages, Long excludeId) {
@@ -493,36 +480,12 @@ public class ChatServiceImpl implements ChatService {
      * 构建系统提示词
      */
     private String buildSystemPrompt(String context) {
-        return buildSystemPrompt(context, null, new ResponseConfidence("MEDIUM", 0.5d, false));
+        return chatPromptBuilder.buildSystemPrompt(context);
     }
 
-    private String buildSystemPrompt(String context, String memorySummary, ResponseConfidence confidence) {
-        String memorySection = (memorySummary == null || memorySummary.isBlank())
-                ? ""
-                : "\n对话摘要（优先作为历史背景，不可覆盖检索事实）：\n" + memorySummary + "\n";
-        String confidenceSection = (confidence == null || !isConfidenceAwareEnabled())
-                ? ""
-                : switch (confidence.label()) {
-                    case "HIGH" -> "\n当前检索置信度：高。回答时直接给出结论并附来源。\n";
-                    case "LOW" -> "\n当前检索置信度：低。回答时必须明确标注“仅供参考”，并说明信息可能不足。\n";
-                    default -> "\n当前检索置信度：中。回答时保持审慎，关键结论必须带来源。\n";
-                };
-        return String.format(
-                "你是一个基于CSDN文章内容的智能问答助手。\n\n" +
-                "你的任务是根据提供的文章内容片段，准确、克制地回答用户的问题。\n\n" +
-                "注意事项：\n" +
-                "1. 仅基于提供的文章内容片段回答，不要补充片段之外的事实\n" +
-                "2. 回答中的关键结论后要附上来源，优先使用“(来源: 文章名 片段x/y)”格式\n" +
-                "3. 如果多个片段存在冲突，单独列出“不一致信息”并说明各自来源\n" +
-                "4. 如果信息不足以完整回答，请明确说明“根据当前检索片段，无法完整回答该问题”，再给出已知部分\n" +
-                "5. 回答要准确、简洁、有条理，避免编造\n" +
-                "%s" +
-                "%s\n" +
-                "%s",
-                memorySection,
-                confidenceSection,
-                context
-        );
+    private String buildSystemPrompt(String context, String memorySummary,
+                                     ResponseConfidenceService.ResponseConfidence confidence) {
+        return chatPromptBuilder.buildSystemPrompt(context, memorySummary, confidence, isConfidenceAwareEnabled());
     }
 
     private String rewriteQuery(String query, List<org.springframework.ai.chat.messages.Message> historyMessages) {
@@ -1168,23 +1131,8 @@ public class ChatServiceImpl implements ChatService {
         return score;
     }
 
-    private ResponseConfidence evaluateConfidence(List<Document> documents) {
-        if (!isConfidenceAwareEnabled()) {
-            return new ResponseConfidence("MEDIUM", 0.5d, false);
-        }
-        if (documents == null || documents.isEmpty()) {
-            return new ResponseConfidence("LOW", 0.0d, true);
-        }
-
-        double topScore = getMetadataDouble(documents.get(0), "score", 0.0d);
-        double normalizedScore = Math.min(1.0d, topScore / 10.0d);
-        if (documents.size() >= 3 && topScore >= 8.0d) {
-            return new ResponseConfidence("HIGH", normalizedScore, false);
-        }
-        if (topScore >= 5.0d || documents.size() >= 2) {
-            return new ResponseConfidence("MEDIUM", Math.max(0.5d, normalizedScore), false);
-        }
-        return new ResponseConfidence("LOW", Math.max(0.2d, normalizedScore), true);
+    private ResponseConfidenceService.ResponseConfidence evaluateConfidence(List<Document> documents) {
+        return responseConfidenceService.evaluateConfidence(documents, isConfidenceAwareEnabled());
     }
 
     private int determineTopK(Session session, String query) {
@@ -1588,4 +1536,3 @@ public class ChatServiceImpl implements ChatService {
         return chatOptimizationProperties == null || !Boolean.FALSE.equals(chatOptimizationProperties.getConfidenceAwareEnabled());
     }
 }
-
