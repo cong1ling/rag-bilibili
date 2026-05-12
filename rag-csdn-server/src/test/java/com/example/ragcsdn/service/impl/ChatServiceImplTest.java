@@ -5,9 +5,13 @@ import com.example.ragcsdn.entity.Message;
 import com.example.ragcsdn.entity.Session;
 import com.example.ragcsdn.enums.MessageRole;
 import com.example.ragcsdn.enums.SessionType;
+import com.example.ragcsdn.service.chat.ChatMetadataHelper;
 import com.example.ragcsdn.service.chat.ChatPromptBuilder;
+import com.example.ragcsdn.service.chat.ChatRoutingPolicy;
 import com.example.ragcsdn.service.chat.ConversationMemoryService;
+import com.example.ragcsdn.service.chat.DocumentRerankService;
 import com.example.ragcsdn.service.chat.QueryUnderstandingService;
+import com.example.ragcsdn.service.chat.RetrievalPipelineService;
 import com.example.ragcsdn.service.chat.ResponseConfidenceService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -122,6 +126,12 @@ class ChatServiceImplTest {
         setField("responseConfidenceService", new ResponseConfidenceService());
         setField("conversationMemoryService", new ConversationMemoryService());
         setField("queryUnderstandingService", new QueryUnderstandingService(new QueryComplexityAnalyzer(properties)));
+        ChatMetadataHelper metadataHelper = new ChatMetadataHelper();
+        RetrievalPipelineService retrievalPipelineService = new RetrievalPipelineService(metadataHelper);
+        setField("chatMetadataHelper", metadataHelper);
+        setField("retrievalPipelineService", retrievalPipelineService);
+        setField("documentRerankService", new DocumentRerankService(metadataHelper, retrievalPipelineService));
+        setField("chatRoutingPolicy", new ChatRoutingPolicy(properties, new QueryComplexityAnalyzer(properties), retrievalPipelineService, metadataHelper));
     }
 
     /**

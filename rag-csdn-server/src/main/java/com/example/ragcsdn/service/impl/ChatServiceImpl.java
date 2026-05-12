@@ -19,10 +19,14 @@ import com.example.ragcsdn.mapper.MessageMapper;
 import com.example.ragcsdn.mapper.SessionMapper;
 import com.example.ragcsdn.mapper.ArticleMapper;
 import com.example.ragcsdn.service.ChatService;
+import com.example.ragcsdn.service.chat.ChatMetadataHelper;
 import com.example.ragcsdn.service.chat.ChatPromptTemplates;
 import com.example.ragcsdn.service.chat.ChatPromptBuilder;
+import com.example.ragcsdn.service.chat.ChatRoutingPolicy;
 import com.example.ragcsdn.service.chat.ConversationMemoryService;
+import com.example.ragcsdn.service.chat.DocumentRerankService;
 import com.example.ragcsdn.service.chat.QueryUnderstandingService;
+import com.example.ragcsdn.service.chat.RetrievalPipelineService;
 import com.example.ragcsdn.service.chat.ResponseConfidenceService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -106,6 +110,18 @@ public class ChatServiceImpl implements ChatService {
 
     @Autowired
     private QueryUnderstandingService queryUnderstandingService;
+
+    @Autowired
+    private ChatMetadataHelper chatMetadataHelper;
+
+    @Autowired
+    private RetrievalPipelineService retrievalPipelineService;
+
+    @Autowired
+    private DocumentRerankService documentRerankService;
+
+    @Autowired
+    private ChatRoutingPolicy chatRoutingPolicy;
 
     private enum QueryIntent {
         DIRECT,
@@ -699,156 +715,35 @@ public class ChatServiceImpl implements ChatService {
     }
 
     private List<String> extractKeywords(String query) {
-        if (query == null || query.isBlank()) {
-            return List.of();
-        }
-
-        String normalized = query.trim();
-        Set<String> keywords = new LinkedHashSet<>();
-        if (normalized.length() >= 2) {
-            keywords.add(normalized);
-        }
-
-        for (String part : normalized.split("[^\\p{L}\\p{N}\\u4E00-\\u9FFF]+")) {
-            String token = part.trim();
-            if (token.length() >= 2) {
-                keywords.add(token);
-            }
-            if (keywords.size() >= 6) {
-                break;
-            }
-        }
-
-        return new ArrayList<>(keywords);
+        return retrievalPipelineService.extractKeywords(query);
     }
 
     private String buildKeywordSearchText(List<String> keywords) {
-        if (keywords == null || keywords.isEmpty()) {
-            return "";
-        }
-
-        return keywords.stream()
-                .map(this::sanitizeFullTextTerm)
-                .filter(term -> !term.isBlank())
-                .distinct()
-                .limit(6)
-                .collect(Collectors.joining(" "));
+        return retrievalPipelineService.buildKeywordSearchText(keywords);
     }
 
     private String sanitizeFullTextTerm(String input) {
-        if (input == null || input.isBlank()) {
-            return "";
-        }
-
-        String sanitized = input
-                .replaceAll("[^\\p{L}\\p{N}\\u4E00-\\u9FFF]+", " ")
-                .replaceAll("\\s+", " ")
-                .trim();
-
-        if (sanitized.length() < 2) {
-            return "";
-        }
-        return sanitized;
+        return retrievalPipelineService.sanitizeFullTextTerm(input);
     }
 
     private List<Document> mergeHybridResults(List<Document> vectorResults, List<Document> keywordResults, int limit) {
-        if (keywordResults.isEmpty()) {
-            return vectorResults.stream().limit(limit).collect(Collectors.toList());
-        }
-        if (vectorResults.isEmpty()) {
-            return keywordResults.stream()
-                    .limit(limit)
-                    .map(document -> document.mutate().metadata("score", 1.0d).build())
-                    .collect(Collectors.toList());
-        }
-
-        Map<String, Document> documentByKey = new LinkedHashMap<>();
-        Map<String, Double> fusedScores = new LinkedHashMap<>();
-        Map<String, Set<String>> sourceByKey = new LinkedHashMap<>();
-
-        accumulateHybridScores(vectorResults, "vector", 1.0d, documentByKey, fusedScores, sourceByKey);
-        accumulateHybridScores(keywordResults, "keyword", 0.7d, documentByKey, fusedScores, sourceByKey);
-
-        return fusedScores.entrySet().stream()
-                .sorted(Map.Entry.<String, Double>comparingByValue().reversed())
-                .limit(limit)
-                .map(entry -> {
-                    Document base = documentByKey.get(entry.getKey());
-                    Set<String> sources = sourceByKey.getOrDefault(entry.getKey(), Set.of());
-                    String label = sources.size() > 1 ? "融合得分" : sources.contains("keyword") ? "关键词得分" : "相似度";
-                    String retrievalSource = sources.size() > 1 ? "hybrid" : sources.stream().findFirst().orElse("vector");
-                    return base.mutate()
-                            .metadata("score", entry.getValue())
-                            .metadata("scoreLabel", label)
-                            .metadata("retrievalSource", retrievalSource)
-                            .build();
-                })
-                .collect(Collectors.toList());
+        return retrievalPipelineService.mergeHybridResults(vectorResults, keywordResults, limit);
     }
 
     private List<Document> mergeQueryCandidates(List<List<Document>> rankedLists, int limit) {
-        if (rankedLists.isEmpty()) {
-            return List.of();
-        }
-        if (rankedLists.size() == 1) {
-            return rankedLists.get(0).stream().limit(limit).collect(Collectors.toList());
-        }
-
-        Map<String, Document> documentByKey = new LinkedHashMap<>();
-        Map<String, Double> fusedScores = new LinkedHashMap<>();
-        Map<String, Set<String>> sourceByKey = new LinkedHashMap<>();
-
-        for (int i = 0; i < rankedLists.size(); i++) {
-            accumulateHybridScores(
-                    rankedLists.get(i),
-                    "query-" + i,
-                    1.0d,
-                    documentByKey,
-                    fusedScores,
-                    sourceByKey
-            );
-        }
-
-        return fusedScores.entrySet().stream()
-                .sorted(Map.Entry.<String, Double>comparingByValue().reversed())
-                .limit(limit)
-                .map(entry -> documentByKey.get(entry.getKey()).mutate()
-                        .metadata("score", entry.getValue())
-                        .metadata("scoreLabel", "多查询融合得分")
-                        .metadata("retrievalSource", "multi-query")
-                        .build())
-                .collect(Collectors.toList());
+        return retrievalPipelineService.mergeQueryCandidates(rankedLists, limit);
     }
 
     private List<Document> rerankDocuments(String query, List<Document> candidates, int finalTopK) {
-        if (candidates.isEmpty()) {
-            return candidates;
-        }
-
-        List<String> keywords = extractKeywords(query);
-        String normalizedQuery = normalizeForMatch(query);
-
-        List<Document> ruleRanked = candidates.stream()
-                .limit(getCandidateTopK(finalTopK))
-                .map(document -> {
-                    double rerankScore = computeRerankScore(document, normalizedQuery, keywords);
-                    return document.mutate()
-                            .metadata("score", rerankScore)
-                            .metadata("scoreLabel", "重排得分")
-                            .metadata("retrievalSource", "rerank")
-                            .build();
-                })
-                .sorted(Comparator
-                        .comparingDouble((Document document) -> getMetadataDouble(document, "score", 0.0d))
-                        .reversed()
-                        .thenComparing(document -> getMetadataString(document, "title", ""), Comparator.reverseOrder()))
-                .limit(finalTopK)
-                .collect(Collectors.toList());
-
-        if (!isModelRerankEnabled() || ruleRanked.size() <= 1) {
-            return ruleRanked;
-        }
-        return rerankDocumentsWithModel(query, ruleRanked, finalTopK);
+        return documentRerankService.rerankDocuments(
+                query,
+                candidates,
+                finalTopK,
+                getCandidateTopK(finalTopK),
+                isModelRerankEnabled(),
+                getModelRerankTopK(),
+                chatClientBuilder
+        );
     }
 
     private List<Document> rerankDocumentsWithModel(String query, List<Document> ruleRanked, int finalTopK) {
@@ -1020,26 +915,7 @@ public class ChatServiceImpl implements ChatService {
     }
 
     private int determineTopK(Session session, String query) {
-        int defaultTopK = getConfiguredTopK();
-        if (!isDynamicTopKEnabled()) {
-            return defaultTopK;
-        }
-
-        RoutingAnalysis routingAnalysis = analyzeRouting(
-                query,
-                new ConversationMemory(List.of(), null, false)
-        );
-
-        if (routingAnalysis.complexityScore() >= getComplexityThreshold()
-                || routingAnalysis.suggestedIntent() != QueryIntent.DIRECT
-                || (session != null && SessionType.isAllArticles(session.getSessionType()))) {
-            return getComplexTopK(defaultTopK);
-        }
-        if (isSimpleFactQuery(normalizeForMatch(query), extractKeywords(query))
-                && routingAnalysis.complexityScore() < getComplexityThreshold()) {
-            return getSimpleTopK(defaultTopK);
-        }
-        return getNormalTopK(defaultTopK);
+        return currentRoutingPolicy().determineTopK(session, query, getConfiguredTopK());
     }
 
     private RoutingAnalysis analyzeRouting(String rewrittenQuery, ConversationMemory memory) {
@@ -1292,25 +1168,19 @@ public class ChatServiceImpl implements ChatService {
     }
 
     private boolean shouldUseLlmFallback(double decisionConfidence) {
-        if (!isRuleRoutingEnabled() || isRoutingObservationOnly()) {
-            return true;
-        }
-        if (!isRuleRoutingLlmFallbackEnabled()) {
-            return false;
-        }
-        return decisionConfidence < getLlmFallbackConfidenceThreshold();
+        return currentRoutingPolicy().shouldUseLlmFallback(decisionConfidence);
     }
 
     private boolean shouldUseHyde(String intentName, double ambiguityScore) {
-        return isHydeEnabled()
-                && "AMBIGUOUS".equals(intentName)
-                && ambiguityScore >= getHydeTriggerThreshold();
+        return currentRoutingPolicy().shouldUseHyde(intentName, ambiguityScore);
     }
 
     private boolean shouldUseDecomposition(String intentName, double breadthScore) {
-        return isDecompositionEnabled()
-                && "BROAD".equals(intentName)
-                && breadthScore >= getDecompositionTriggerThreshold();
+        return currentRoutingPolicy().shouldUseDecomposition(intentName, breadthScore);
+    }
+
+    private ChatRoutingPolicy currentRoutingPolicy() {
+        return new ChatRoutingPolicy(chatOptimizationProperties, queryComplexityAnalyzer, retrievalPipelineService, chatMetadataHelper);
     }
 
     private boolean isRuleRoutingEnabled() {
