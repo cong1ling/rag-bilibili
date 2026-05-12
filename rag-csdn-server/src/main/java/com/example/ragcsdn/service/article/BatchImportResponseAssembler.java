@@ -23,24 +23,24 @@ public class BatchImportResponseAssembler {
     public void addSubmitted(BatchImportResponse response, CsdnArticleLink link, ArticleResponse imported) {
         BatchImportItemResponse item = baseItem(link);
         item.setArticleId(imported.getId());
-        item.setStatus("SUBMITTED");
-        item.setMessage("已提交导入任务");
+        item.setStatus(BatchImportStatus.SUBMITTED.code());
+        item.setMessage(BatchImportStatus.SUBMITTED.defaultMessage());
         response.getItems().add(item);
         response.setSubmittedCount(response.getSubmittedCount() + 1);
     }
 
     public void addDuplicate(BatchImportResponse response, CsdnArticleLink link, String message) {
         BatchImportItemResponse item = baseItem(link);
-        item.setStatus("SKIPPED_DUPLICATE");
-        item.setMessage(message);
+        item.setStatus(BatchImportStatus.SKIPPED_DUPLICATE.code());
+        item.setMessage(defaultMessageIfBlank(message, BatchImportStatus.SKIPPED_DUPLICATE));
         response.getItems().add(item);
         response.setDuplicateCount(response.getDuplicateCount() + 1);
     }
 
     public void addFailure(BatchImportResponse response, CsdnArticleLink link, String message) {
         BatchImportItemResponse item = baseItem(link);
-        item.setStatus("FAILED");
-        item.setMessage(message);
+        item.setStatus(BatchImportStatus.FAILED.code());
+        item.setMessage(defaultMessageIfBlank(message, BatchImportStatus.FAILED));
         response.getItems().add(item);
         response.setFailedCount(response.getFailedCount() + 1);
     }
@@ -51,5 +51,9 @@ public class BatchImportResponseAssembler {
         item.setSourceUrl(link.sourceUrl());
         item.setTitle(link.title());
         return item;
+    }
+
+    private String defaultMessageIfBlank(String message, BatchImportStatus status) {
+        return message == null || message.isBlank() ? status.defaultMessage() : message;
     }
 }

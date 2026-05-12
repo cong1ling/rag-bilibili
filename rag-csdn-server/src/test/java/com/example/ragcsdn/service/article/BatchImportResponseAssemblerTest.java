@@ -32,10 +32,10 @@ class BatchImportResponseAssemblerTest {
         assertEquals(1, response.getDuplicateCount());
         assertEquals(1, response.getFailedCount());
         assertEquals(3, response.getItems().size());
-        assertEquals("SUBMITTED", response.getItems().get(0).getStatus());
+        assertEquals(BatchImportStatus.SUBMITTED.code(), response.getItems().get(0).getStatus());
         assertEquals(11L, response.getItems().get(0).getArticleId());
-        assertEquals("SKIPPED_DUPLICATE", response.getItems().get(1).getStatus());
-        assertEquals("FAILED", response.getItems().get(2).getStatus());
+        assertEquals(BatchImportStatus.SKIPPED_DUPLICATE.code(), response.getItems().get(1).getStatus());
+        assertEquals(BatchImportStatus.FAILED.code(), response.getItems().get(2).getStatus());
         assertEquals("抓取失败", response.getItems().get(2).getMessage());
     }
 }

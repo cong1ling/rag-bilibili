@@ -1,7 +1,6 @@
 package com.example.ragcsdn.service.impl;
 
 import com.alibaba.cloud.ai.reader.csdn.CsdnArticleLink;
-import com.alibaba.cloud.ai.reader.csdn.CsdnDiscoveryReader;
 import com.example.ragcsdn.dto.request.ImportRecommendedArticlesRequest;
 import com.example.ragcsdn.dto.request.ImportArticleRequest;
 import com.example.ragcsdn.dto.request.RebuildArticleRequest;
@@ -17,10 +16,14 @@ import com.example.ragcsdn.mapper.MessageMapper;
 import com.example.ragcsdn.mapper.SessionMapper;
 import com.example.ragcsdn.mapper.VectorMappingMapper;
 import com.example.ragcsdn.service.UserService;
+import com.example.ragcsdn.service.article.ArticleImportCommandService;
+import com.example.ragcsdn.service.article.ArticleImportDecisionService;
 import com.example.ragcsdn.service.article.ArticleImportFailureHandler;
+import com.example.ragcsdn.service.article.ArticleLinkDiscoveryService;
 import com.example.ragcsdn.service.article.ArticleResponseAssembler;
 import com.example.ragcsdn.service.article.BatchImportResponseAssembler;
 import com.example.ragcsdn.util.ChunkDocumentSplitter;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -82,10 +85,20 @@ class ArticleServiceImplTest {
     private ArticleImportFailureHandler articleImportFailureHandler;
 
     @Mock
+    private ArticleLinkDiscoveryService articleLinkDiscoveryService;
+
+    @Mock
     private TaskExecutor articleImportTaskExecutor;
 
     @InjectMocks
     private ArticleServiceImpl articleService;
+
+    @BeforeEach
+    void setUp() {
+        setField(articleService, "articleImportDecisionService", new ArticleImportDecisionService());
+        setField(articleService, "articleImportCommandService",
+                new ArticleImportCommandService(articleMapper, articleResponseAssembler, articleImportTaskExecutor));
+    }
 
     /**
      * 验证同步阶段：importArticle() 应创建 IMPORTING 状态的文章记录并立即返回，
@@ -227,21 +240,16 @@ class ArticleServiceImplTest {
     }
 
     @Test
-    void importRecommendedArticles_shouldTranslateUnexpectedDiscoveryFailure() {
+    void importRecommendedArticles_shouldTranslateUnexpectedDiscoveryFailure() throws Exception {
         ImportRecommendedArticlesRequest request = new ImportRecommendedArticlesRequest();
         request.setLimit(3);
 
-        ArticleServiceImpl subject = new ArticleServiceImpl() {
-            @Override
-            CsdnDiscoveryReader newDiscoveryReader(String cookieHeader) {
-                throw new IllegalStateException("boom");
-            }
-        };
-        injectSharedDependencies(subject);
         when(userService.getCsdnSessionCookie(1L)).thenReturn("cookie");
+        when(articleLinkDiscoveryService.discoverRecommendedArticles(eq("cookie"), any(ImportRecommendedArticlesRequest.class)))
+                .thenThrow(new IllegalStateException("boom"));
 
         BusinessException error = assertThrows(BusinessException.class,
-                () -> subject.importRecommendedArticles(request, 1L));
+                () -> articleService.importRecommendedArticles(request, 1L));
 
         assertEquals(ErrorCode.VIDEO_IMPORT_FAILED.getCode(), error.getCode());
         assertEquals("首页推荐文章抓取失败，请稍后重试", error.getMessage());
@@ -259,7 +267,10 @@ class ArticleServiceImplTest {
         setField(subject, "articleResponseAssembler", articleResponseAssembler);
         setField(subject, "batchImportResponseAssembler", batchImportResponseAssembler);
         setField(subject, "articleImportFailureHandler", articleImportFailureHandler);
-        setField(subject, "articleImportTaskExecutor", articleImportTaskExecutor);
+        setField(subject, "articleLinkDiscoveryService", articleLinkDiscoveryService);
+        setField(subject, "articleImportDecisionService", new ArticleImportDecisionService());
+        setField(subject, "articleImportCommandService",
+                new ArticleImportCommandService(articleMapper, articleResponseAssembler, articleImportTaskExecutor));
     }
 
     private void setField(ArticleServiceImpl subject, String fieldName, Object value) {
