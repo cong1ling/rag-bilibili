@@ -26,6 +26,7 @@ import com.example.ragcsdn.service.chat.ChatRoutingPolicy;
 import com.example.ragcsdn.service.chat.ConversationMemoryService;
 import com.example.ragcsdn.service.chat.DocumentRerankService;
 import com.example.ragcsdn.service.chat.QueryUnderstandingService;
+import com.example.ragcsdn.service.chat.QueryRewriteService;
 import com.example.ragcsdn.service.chat.RetrievalPipelineService;
 import com.example.ragcsdn.service.chat.ResponseConfidenceService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -110,6 +111,9 @@ public class ChatServiceImpl implements ChatService {
 
     @Autowired
     private QueryUnderstandingService queryUnderstandingService;
+
+    @Autowired
+    private QueryRewriteService queryRewriteService;
 
     @Autowired
     private ChatMetadataHelper chatMetadataHelper;
@@ -493,27 +497,7 @@ public class ChatServiceImpl implements ChatService {
     }
 
     private String rewriteQuery(String query, List<org.springframework.ai.chat.messages.Message> historyMessages, String memorySummary) {
-        if (!isQueryRewriteEnabled() || historyMessages.isEmpty()) {
-            return query;
-        }
-
-        try {
-            String rewritten = chatClientBuilder.build().prompt()
-                    .system(ChatPromptTemplates.QUERY_REWRITE_SYSTEM_PROMPT + buildSummaryPrompt(memorySummary))
-                    .messages(historyMessages)
-                    .user(query)
-                    .call()
-                    .content();
-
-            String normalized = normalizeRewrittenQuery(query, rewritten);
-            if (!normalized.equals(query)) {
-                log.info("查询改写完成: original={}, rewritten={}", query, normalized);
-            }
-            return normalized;
-        } catch (Exception e) {
-            log.warn("查询改写失败，回退到原始问题: query={}", query, e);
-            return query;
-        }
+        return queryRewriteService.rewrite(query, historyMessages, memorySummary);
     }
 
     private QueryIntent classifyQuery(String query, ConversationMemory memory) {
