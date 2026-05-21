@@ -26,6 +26,7 @@ import com.example.ragcsdn.service.chat.ChatRoutingPolicy;
 import com.example.ragcsdn.service.chat.ConversationMemoryService;
 import com.example.ragcsdn.service.chat.DocumentRerankService;
 import com.example.ragcsdn.service.chat.QueryUnderstandingService;
+import com.example.ragcsdn.service.chat.QueryExpansionService;
 import com.example.ragcsdn.service.chat.QueryRewriteService;
 import com.example.ragcsdn.service.chat.RetrievalPipelineService;
 import com.example.ragcsdn.service.chat.ResponseConfidenceService;
@@ -114,6 +115,9 @@ public class ChatServiceImpl implements ChatService {
 
     @Autowired
     private QueryRewriteService queryRewriteService;
+
+    @Autowired
+    private QueryExpansionService queryExpansionService;
 
     @Autowired
     private ChatMetadataHelper chatMetadataHelper;
@@ -395,81 +399,55 @@ public class ChatServiceImpl implements ChatService {
 
     private QueryUnderstandingDecision understandQuery(String query, ConversationMemory memory) {
         String rewrittenQuery = rewriteQuery(query, memory.recentMessages(), memory.summary());
-        if (!isQueryUnderstandingEnabled()) {
-            QueryPlan directPlan = new QueryPlan(
-                    QueryIntent.DIRECT,
-                    query,
-                    rewrittenQuery,
-                    List.of(new RetrievalQuery(rewrittenQuery, rewrittenQuery, "direct"))
-            );
-            return new QueryUnderstandingDecision(
-                    directPlan,
-                    new RoutingAnalysis(QueryIntent.DIRECT, 0.0d, 0.0d, 0.0d, 1.0d, false),
-                    false,
-                    false,
-                    false
-            );
-        }
-
-        RoutingAnalysis routingAnalysis = analyzeRouting(rewrittenQuery, memory);
-        QueryIntent intent = routingAnalysis.suggestedIntent();
-        boolean usedLlmFallback = shouldUseLlmFallback(routingAnalysis.decisionConfidence());
-        if (usedLlmFallback) {
-            intent = classifyQuery(rewrittenQuery, memory);
-        }
-
-        boolean usedHyde = false;
-        boolean usedDecomposition = false;
-        QueryPlan queryPlan;
-
-        if (shouldUseHyde(intent.name(), routingAnalysis.ambiguityScore())) {
-            usedHyde = true;
-            String hydeDocument = generateHydeDocument(rewrittenQuery, memory);
-            queryPlan = new QueryPlan(
-                    intent,
-                    query,
-                    rewrittenQuery,
-                    List.of(
-                            new RetrievalQuery(rewrittenQuery, rewrittenQuery, "direct"),
-                            new RetrievalQuery(hydeDocument, null, "hyde")
-                    )
-            );
-        } else if (shouldUseDecomposition(intent.name(), routingAnalysis.breadthScore())) {
-            List<String> subQueries = decomposeQuery(rewrittenQuery, memory);
-            if (subQueries.size() > 1) {
-                usedDecomposition = true;
-                queryPlan = new QueryPlan(
-                        intent,
-                        query,
-                        rewrittenQuery,
-                        subQueries.stream()
-                                .map(subQuery -> new RetrievalQuery(subQuery, subQuery, "subquery"))
-                                .collect(Collectors.toList())
-                );
-            } else {
-                queryPlan = new QueryPlan(
-                        intent,
-                        query,
-                        rewrittenQuery,
-                        List.of(new RetrievalQuery(rewrittenQuery, rewrittenQuery, "direct"))
-                );
-            }
-        } else {
-            queryPlan = new QueryPlan(
-                    intent,
-                    query,
-                    rewrittenQuery,
-                    List.of(new RetrievalQuery(rewrittenQuery, rewrittenQuery, "direct"))
-            );
-        }
-
-        return new QueryUnderstandingDecision(
-                queryPlan,
-                routingAnalysis,
-                usedLlmFallback,
-                usedHyde,
-                usedDecomposition
+        QueryExpansionService.QueryExpansionDecision decision = queryExpansionService.expand(
+                query,
+                rewrittenQuery,
+                new ConversationMemoryService.ConversationMemory(
+                        memory.recentMessages(),
+                        memory.summary(),
+                        memory.summaryUsed()
+                )
         );
+        return new QueryUnderstandingDecision(
+                mapQueryPlan(decision.queryPlan()),
+                mapRoutingAnalysis(decision.routingAnalysis()),
+                decision.usedLlmFallback(),
+                decision.usedHyde(),
+                decision.usedDecomposition()
+        );
+    }
+
+    private QueryPlan mapQueryPlan(QueryExpansionService.QueryPlan queryPlan) {
+        return new QueryPlan(
+                mapIntent(queryPlan.intent()),
+                queryPlan.originalQuery(),
+                queryPlan.rewrittenQuery(),
+                queryPlan.retrievalQueries().stream()
+                        .map(retrievalQuery -> new RetrievalQuery(
+                                retrievalQuery.vectorQuery(),
+                                retrievalQuery.keywordQuery(),
+                                retrievalQuery.source()))
+                        .collect(Collectors.toList())
+        );
+    }
+
+    private RoutingAnalysis mapRoutingAnalysis(QueryExpansionService.RoutingAnalysis routingAnalysis) {
+        return new RoutingAnalysis(
+                mapIntent(routingAnalysis.suggestedIntent()),
+                routingAnalysis.ambiguityScore(),
+                routingAnalysis.breadthScore(),
+                routingAnalysis.complexityScore(),
+                routingAnalysis.decisionConfidence(),
+                routingAnalysis.conversationDependent()
+        );
+    }
+
+    private QueryIntent mapIntent(QueryExpansionService.QueryIntent intent) {
+        return switch (intent) {
+            case DIRECT -> QueryIntent.DIRECT;
+            case AMBIGUOUS -> QueryIntent.AMBIGUOUS;
+            case BROAD -> QueryIntent.BROAD;
+        };
     }
 
     /**
