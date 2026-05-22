@@ -24,6 +24,7 @@ import com.example.ragcsdn.service.chat.ChatPromptTemplates;
 import com.example.ragcsdn.service.chat.ChatPromptBuilder;
 import com.example.ragcsdn.service.chat.ChatRoutingPolicy;
 import com.example.ragcsdn.service.chat.ConversationMemoryService;
+import com.example.ragcsdn.service.chat.ConversationSummaryService;
 import com.example.ragcsdn.service.chat.DocumentRerankService;
 import com.example.ragcsdn.service.chat.QueryUnderstandingService;
 import com.example.ragcsdn.service.chat.QueryExpansionService;
@@ -118,6 +119,9 @@ public class ChatServiceImpl implements ChatService {
 
     @Autowired
     private QueryExpansionService queryExpansionService;
+
+    @Autowired
+    private ConversationSummaryService conversationSummaryService;
 
     @Autowired
     private ChatMetadataHelper chatMetadataHelper;
@@ -372,29 +376,13 @@ public class ChatServiceImpl implements ChatService {
                 getSummaryRecentMessages(),
                 getMaxHistory(),
                 isSummaryEnabled(),
-                this::summarizeConversation
+                conversationSummaryService::summarize
         );
         return new ConversationMemory(memory.recentMessages(), memory.summary(), memory.summaryUsed());
     }
 
     private void refreshAndPersistConversationSummary(Long sessionId) {
-        if (!isSummaryEnabled()) {
-            return;
-        }
-
-        List<Message> messages = messageMapper.selectBySessionId(sessionId).stream()
-                .sorted(Comparator.comparing(Message::getCreateTime))
-                .collect(Collectors.toList());
-
-        if (messages.size() <= getSummaryTriggerMessages()) {
-            sessionMapper.updateSummary(sessionId, null, null);
-            return;
-        }
-
-        int recentCount = Math.min(getSummaryRecentMessages(), messages.size());
-        List<Message> olderMessages = messages.subList(0, messages.size() - recentCount);
-        String summary = summarizeConversation(olderMessages);
-        sessionMapper.updateSummary(sessionId, summary, LocalDateTime.now());
+        conversationSummaryService.refreshAndPersist(sessionId);
     }
 
     private QueryUnderstandingDecision understandQuery(String query, ConversationMemory memory) {
@@ -547,26 +535,7 @@ public class ChatServiceImpl implements ChatService {
     }
 
     private String summarizeConversation(List<Message> messages) {
-        if (messages.isEmpty()) {
-            return null;
-        }
-
-        try {
-            String transcript = messages.stream()
-                    .map(message -> message.getRole() + "：" + message.getContent())
-                    .collect(Collectors.joining("\n"));
-
-            String summary = chatClientBuilder.build().prompt()
-                    .system(ChatPromptTemplates.SUMMARY_SYSTEM_PROMPT)
-                    .user(transcript)
-                    .call()
-                    .content();
-
-            return normalizeConversationSummary(summary, messages);
-        } catch (Exception e) {
-            log.warn("对话摘要生成失败，回退到规则摘要", e);
-            return normalizeConversationSummary(null, messages);
-        }
+        return conversationSummaryService.summarize(messages);
     }
 
     private String normalizeConversationSummary(String summary, List<Message> messages) {
