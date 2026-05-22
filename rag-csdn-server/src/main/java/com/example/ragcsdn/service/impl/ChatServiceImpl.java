@@ -19,6 +19,7 @@ import com.example.ragcsdn.mapper.MessageMapper;
 import com.example.ragcsdn.mapper.SessionMapper;
 import com.example.ragcsdn.mapper.ArticleMapper;
 import com.example.ragcsdn.service.ChatService;
+import com.example.ragcsdn.service.chat.ChatStreamingOrchestrator;
 import com.example.ragcsdn.service.chat.ChatMetadataHelper;
 import com.example.ragcsdn.service.chat.ChatPromptTemplates;
 import com.example.ragcsdn.service.chat.ChatPromptBuilder;
@@ -46,7 +47,6 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
-import reactor.core.publisher.Flux;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -122,6 +122,9 @@ public class ChatServiceImpl implements ChatService {
 
     @Autowired
     private ConversationSummaryService conversationSummaryService;
+
+    @Autowired
+    private ChatStreamingOrchestrator chatStreamingOrchestrator;
 
     @Autowired
     private ChatMetadataHelper chatMetadataHelper;
@@ -238,84 +241,19 @@ public class ChatServiceImpl implements ChatService {
                 // 9. 构建提示词
                 String systemPrompt = buildSystemPrompt(context, memory.summary(), confidence);
 
-                // 10. 流式调用 LLM
-                ChatClient chatClient = chatClientBuilder.build();
-                Flux<ChatResponse> responseFlux = chatClient.prompt()
-                        .system(systemPrompt)
-                        .messages(memory.recentMessages())
-                        .user(content)
-                        .stream()
-                        .chatResponse();
-
-                // 11. 收集完整响应
-                StringBuilder fullResponse = new StringBuilder();
-
-                // 12. 流式发送
-                responseFlux.subscribe(
-                        response -> {
-                            String chunk = response.getResult().getOutput().getText();
-                            if (chunk != null && !chunk.isEmpty()) {
-                                fullResponse.append(chunk);
-                                try {
-                                    SseContentEvent contentEvent = new SseContentEvent(chunk);
-                                    emitter.send(SseEmitter.event()
-                                            .name("content")
-                                            .data(objectMapper.writeValueAsString(contentEvent)));
-                                } catch (Exception e) {
-                                    log.error("SSE发送失败", e);
-                                    emitter.completeWithError(e);
-                                }
-                            }
-                        },
-                        error -> {
-                            log.error("LLM调用失败", error);
-                            try {
-                                SseErrorEvent errorEvent = new SseErrorEvent(
-                                        error.getMessage() != null ? error.getMessage() : "未知错误");
-                                emitter.send(SseEmitter.event()
-                                        .name("error")
-                                        .data(objectMapper.writeValueAsString(errorEvent)));
-                            } catch (Exception e) {
-                                log.error("发送错误事件失败", e);
-                            }
-                            emitter.completeWithError(error);
-                        },
-                        () -> {
-                            try {
-                                // 13. 保存助手消息
-                                Message assistantMessage = new Message();
-                                assistantMessage.setSessionId(sessionId);
-                                assistantMessage.setRole(MessageRole.ASSISTANT.getCode());
-                                assistantMessage.setContent(fullResponse.toString());
-                                assistantMessage.setCreateTime(LocalDateTime.now());
-                                messageMapper.insert(assistantMessage);
-
-                                refreshAndPersistConversationSummary(sessionId);
-
-                                // 14. 发送end事件
-                                SseEndEvent endEvent = new SseEndEvent(
-                                        assistantMessage.getId(),
-                                        fullResponse.toString());
-                                endEvent.setQueryIntent(queryPlan.intent().name());
-                                endEvent.setRewrittenQuery(queryPlan.rewrittenQuery());
-                                endEvent.setConfidenceLabel(confidence.label());
-                                endEvent.setConfidenceScore(confidence.score());
-                                endEvent.setSourceCount(relevantDocs.size());
-                                endEvent.setKnowledgeGap(confidence.knowledgeGap());
-                                endEvent.setSummaryUsed(memory.summaryUsed());
-                                emitter.send(SseEmitter.event()
-                                        .name("end")
-                                        .data(objectMapper.writeValueAsString(endEvent)));
-
-                                // 15. 完成 SSE
-                                emitter.complete();
-                                log.info("对话完成: sessionId={}, userId={}", sessionId, userId);
-                            } catch (Exception e) {
-                                log.error("发送end事件失败", e);
-                                emitter.completeWithError(e);
-                            }
-                        }
-                );
+                chatStreamingOrchestrator.stream(new ChatStreamingOrchestrator.StreamRequest(
+                        emitter,
+                        sessionId,
+                        userId,
+                        userMessage.getId(),
+                        content,
+                        systemPrompt,
+                        memory.recentMessages(),
+                        mapQueryPlan(queryPlan),
+                        confidence,
+                        relevantDocs,
+                        memory.summaryUsed()
+                ));
 
             } catch (Exception e) {
                 log.error("对话处理失败: sessionId={}, userId={}", sessionId, userId, e);
@@ -419,6 +357,20 @@ public class ChatServiceImpl implements ChatService {
         );
     }
 
+    private QueryExpansionService.QueryPlan mapQueryPlan(QueryPlan queryPlan) {
+        return new QueryExpansionService.QueryPlan(
+                mapIntent(queryPlan.intent()),
+                queryPlan.originalQuery(),
+                queryPlan.rewrittenQuery(),
+                queryPlan.retrievalQueries().stream()
+                        .map(retrievalQuery -> new QueryExpansionService.RetrievalQuery(
+                                retrievalQuery.vectorQuery(),
+                                retrievalQuery.keywordQuery(),
+                                retrievalQuery.source()))
+                        .collect(Collectors.toList())
+        );
+    }
+
     private RoutingAnalysis mapRoutingAnalysis(QueryExpansionService.RoutingAnalysis routingAnalysis) {
         return new RoutingAnalysis(
                 mapIntent(routingAnalysis.suggestedIntent()),
@@ -435,6 +387,14 @@ public class ChatServiceImpl implements ChatService {
             case DIRECT -> QueryIntent.DIRECT;
             case AMBIGUOUS -> QueryIntent.AMBIGUOUS;
             case BROAD -> QueryIntent.BROAD;
+        };
+    }
+
+    private QueryExpansionService.QueryIntent mapIntent(QueryIntent intent) {
+        return switch (intent) {
+            case DIRECT -> QueryExpansionService.QueryIntent.DIRECT;
+            case AMBIGUOUS -> QueryExpansionService.QueryIntent.AMBIGUOUS;
+            case BROAD -> QueryExpansionService.QueryIntent.BROAD;
         };
     }
 
