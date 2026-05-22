@@ -22,6 +22,42 @@ class ChatRoutingPolicyTest {
         assertThat(topK).isEqualTo(8);
     }
 
+    @Test
+    void shouldUseLlmFallback_shouldSkipFallbackForHighConfidenceRuleMode() {
+        ChatOptimizationProperties properties = properties();
+        properties.setRoutingObservationOnly(false);
+        ChatRoutingPolicy policy = new ChatRoutingPolicy(properties, new QueryComplexityAnalyzer(properties));
+
+        boolean usedFallback = policy.shouldUseLlmFallback(0.88d);
+
+        assertThat(usedFallback).isFalse();
+    }
+
+    @Test
+    void shouldUseLlmFallback_shouldUseFallbackForLowConfidenceRuleMode() {
+        ChatOptimizationProperties properties = properties();
+        properties.setRoutingObservationOnly(false);
+        ChatRoutingPolicy policy = new ChatRoutingPolicy(properties, new QueryComplexityAnalyzer(properties));
+
+        boolean usedFallback = policy.shouldUseLlmFallback(0.41d);
+
+        assertThat(usedFallback).isTrue();
+    }
+
+    @Test
+    void routeGuards_shouldRequireMatchingIntentAndThreshold() {
+        ChatOptimizationProperties properties = properties();
+        properties.setRoutingObservationOnly(false);
+        properties.setHydeTriggerThreshold(0.72d);
+        properties.setDecompositionTriggerThreshold(0.68d);
+        ChatRoutingPolicy policy = new ChatRoutingPolicy(properties, new QueryComplexityAnalyzer(properties));
+
+        assertThat(policy.shouldUseHyde("AMBIGUOUS", 0.80d)).isTrue();
+        assertThat(policy.shouldUseHyde("DIRECT", 0.80d)).isFalse();
+        assertThat(policy.shouldUseDecomposition("BROAD", 0.78d)).isTrue();
+        assertThat(policy.shouldUseDecomposition("DIRECT", 0.78d)).isFalse();
+    }
+
     private ChatOptimizationProperties properties() {
         ChatOptimizationProperties properties = new ChatOptimizationProperties();
         properties.setRuleRoutingEnabled(true);

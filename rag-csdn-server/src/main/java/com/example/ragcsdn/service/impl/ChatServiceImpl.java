@@ -3,10 +3,7 @@ package com.example.ragcsdn.service.impl;
 import com.alibaba.cloud.ai.vectorstore.dashvector.DashVectorStore;
 import com.example.ragcsdn.config.ChatOptimizationProperties;
 import com.example.ragcsdn.config.DashVectorProperties;
-import com.example.ragcsdn.dto.sse.SseContentEvent;
-import com.example.ragcsdn.dto.sse.SseEndEvent;
 import com.example.ragcsdn.dto.sse.SseErrorEvent;
-import com.example.ragcsdn.dto.sse.SseStartEvent;
 import com.example.ragcsdn.entity.Message;
 import com.example.ragcsdn.entity.Session;
 import com.example.ragcsdn.entity.Article;
@@ -21,7 +18,6 @@ import com.example.ragcsdn.mapper.ArticleMapper;
 import com.example.ragcsdn.service.ChatService;
 import com.example.ragcsdn.service.chat.ChatStreamingOrchestrator;
 import com.example.ragcsdn.service.chat.ChatMetadataHelper;
-import com.example.ragcsdn.service.chat.ChatPromptTemplates;
 import com.example.ragcsdn.service.chat.ChatPromptBuilder;
 import com.example.ragcsdn.service.chat.ChatRoutingPolicy;
 import com.example.ragcsdn.service.chat.ConversationMemoryService;
@@ -38,7 +34,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.UserMessage;
-import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.filter.FilterExpressionBuilder;
@@ -135,9 +130,6 @@ public class ChatServiceImpl implements ChatService {
     @Autowired
     private DocumentRerankService documentRerankService;
 
-    @Autowired
-    private ChatRoutingPolicy chatRoutingPolicy;
-
     private enum QueryIntent {
         DIRECT,
         AMBIGUOUS,
@@ -207,17 +199,11 @@ public class ChatServiceImpl implements ChatService {
         // 4. 使用TaskExecutor异步处理
         taskExecutor.execute(() -> {
             try {
-                // 5. 发送start事件
-                SseStartEvent startEvent = new SseStartEvent(userMessage.getId());
-                emitter.send(SseEmitter.event()
-                        .name("start")
-                        .data(objectMapper.writeValueAsString(startEvent)));
-
-                // 6. 获取历史消息并构建记忆上下文
+                // 5. 获取历史消息并构建记忆上下文
                 List<Message> historyMessages = messageMapper.selectBySessionId(sessionId);
                 ConversationMemory memory = buildConversationMemory(session, historyMessages, userMessage.getId());
 
-                // 7. Query 理解与检索路由
+                // 6. Query 理解与检索路由
                 QueryUnderstandingDecision decision = understandQuery(content, memory);
                 QueryPlan queryPlan = decision.queryPlan();
                 List<Document> relevantDocs = retrieveRelevantDocuments(session, queryPlan, userId);
@@ -235,10 +221,10 @@ public class ChatServiceImpl implements ChatService {
                         relevantDocs.size()
                 );
 
-                // 8. 构建上下文
+                // 7. 构建上下文
                 String context = buildContext(relevantDocs);
 
-                // 9. 构建提示词
+                // 8. 构建提示词
                 String systemPrompt = buildSystemPrompt(context, memory.summary(), confidence);
 
                 chatStreamingOrchestrator.stream(new ChatStreamingOrchestrator.StreamRequest(
@@ -319,12 +305,8 @@ public class ChatServiceImpl implements ChatService {
         return new ConversationMemory(memory.recentMessages(), memory.summary(), memory.summaryUsed());
     }
 
-    private void refreshAndPersistConversationSummary(Long sessionId) {
-        conversationSummaryService.refreshAndPersist(sessionId);
-    }
-
     private QueryUnderstandingDecision understandQuery(String query, ConversationMemory memory) {
-        String rewrittenQuery = rewriteQuery(query, memory.recentMessages(), memory.summary());
+        String rewrittenQuery = queryRewriteService.rewrite(query, memory.recentMessages(), memory.summary());
         QueryExpansionService.QueryExpansionDecision decision = queryExpansionService.expand(
                 query,
                 rewrittenQuery,
@@ -418,38 +400,6 @@ public class ChatServiceImpl implements ChatService {
         return chatPromptBuilder.buildSystemPrompt(context, memorySummary, confidence, isConfidenceAwareEnabled());
     }
 
-    private String rewriteQuery(String query, List<org.springframework.ai.chat.messages.Message> historyMessages) {
-        return rewriteQuery(query, historyMessages, null);
-    }
-
-    private String rewriteQuery(String query, List<org.springframework.ai.chat.messages.Message> historyMessages, String memorySummary) {
-        return queryRewriteService.rewrite(query, historyMessages, memorySummary);
-    }
-
-    private QueryIntent classifyQuery(String query, ConversationMemory memory) {
-        try {
-            String result = chatClientBuilder.build().prompt()
-                    .system(ChatPromptTemplates.QUERY_INTENT_SYSTEM_PROMPT + buildSummaryPrompt(memory.summary()))
-                    .messages(memory.recentMessages())
-                    .user(query)
-                    .call()
-                    .content();
-
-            return normalizeQueryIntent(result, query);
-        } catch (Exception e) {
-            log.warn("Query 分类失败，回退到启发式规则: query={}", query, e);
-            return inferQueryIntentHeuristically(query);
-        }
-    }
-
-    private QueryIntent normalizeQueryIntent(String raw, String fallbackQuery) {
-        return switch (queryUnderstandingService.normalizeQueryIntent(raw, fallbackQuery, false)) {
-            case AMBIGUOUS -> QueryIntent.AMBIGUOUS;
-            case BROAD -> QueryIntent.BROAD;
-            case DIRECT -> QueryIntent.DIRECT;
-        };
-    }
-
     private QueryIntent inferQueryIntentHeuristically(String query) {
         return switch (queryUnderstandingService.inferQueryIntentHeuristically(query, false)) {
             case AMBIGUOUS -> QueryIntent.AMBIGUOUS;
@@ -458,52 +408,8 @@ public class ChatServiceImpl implements ChatService {
         };
     }
 
-    private String generateHydeDocument(String query, ConversationMemory memory) {
-        try {
-            String hyde = chatClientBuilder.build().prompt()
-                    .system(ChatPromptTemplates.HYDE_SYSTEM_PROMPT)
-                    .messages(memory.recentMessages())
-                    .user(query)
-                    .call()
-                    .content();
-
-            return (hyde == null || hyde.isBlank()) ? query : hyde.trim();
-        } catch (Exception e) {
-            log.warn("HyDE 生成失败，回退到原始检索查询: query={}", query, e);
-            return query;
-        }
-    }
-
-    private List<String> decomposeQuery(String query, ConversationMemory memory) {
-        try {
-            String result = chatClientBuilder.build().prompt()
-                    .system(ChatPromptTemplates.DECOMPOSITION_SYSTEM_PROMPT)
-                    .messages(memory.recentMessages())
-                    .user(query)
-                    .call()
-                    .content();
-
-            return normalizeDecomposedQueries(result, query);
-        } catch (Exception e) {
-            log.warn("Query 拆解失败，回退到单查询: query={}", query, e);
-            return List.of(query);
-        }
-    }
-
     private List<String> normalizeDecomposedQueries(String raw, String fallbackQuery) {
         return queryUnderstandingService.normalizeDecomposedQueries(raw, fallbackQuery, getMaxDecomposedQueries());
-    }
-
-    private String summarizeConversation(List<Message> messages) {
-        return conversationSummaryService.summarize(messages);
-    }
-
-    private String normalizeConversationSummary(String summary, List<Message> messages) {
-        return conversationMemoryService.normalizeConversationSummary(summary, messages, getSummaryMaxLength());
-    }
-
-    private String buildSummaryPrompt(String memorySummary) {
-        return queryUnderstandingService.buildSummaryPrompt(memorySummary);
     }
 
     private String normalizeRewrittenQuery(String originalQuery, String rewritten) {
@@ -637,170 +543,6 @@ public class ChatServiceImpl implements ChatService {
         );
     }
 
-    private List<Document> rerankDocumentsWithModel(String query, List<Document> ruleRanked, int finalTopK) {
-        int modelWindowSize = Math.min(ruleRanked.size(), getModelRerankTopK());
-        if (modelWindowSize <= 1) {
-            return ruleRanked;
-        }
-
-        List<Document> modelWindow = new ArrayList<>(ruleRanked.subList(0, modelWindowSize));
-        try {
-            String result = chatClientBuilder.build().prompt()
-                    .system("""
-                            你是RAG检索重排器。
-                            你的任务是根据用户问题，对候选片段按“最有助于回答问题”的顺序重排。
-                            评估标准：
-                            1. 与问题直接相关
-                            2. 能提供更完整、更精确的事实
-                            3. 来源信息明确
-                            4. 避免重复语义
-                            只输出候选编号，使用英文逗号分隔，例如：2,1,3
-                            不要输出解释，不要输出编号之外的内容。
-                            """)
-                    .user(buildModelRerankPrompt(query, modelWindow, finalTopK))
-                    .call()
-                    .content();
-
-            return applyModelRerankResult(modelWindow, ruleRanked, result, finalTopK);
-        } catch (Exception e) {
-            log.warn("模型式 Rerank 失败，回退到规则重排: query={}", query, e);
-            return ruleRanked;
-        }
-    }
-
-    private String buildModelRerankPrompt(String query, List<Document> candidates, int finalTopK) {
-        StringBuilder prompt = new StringBuilder();
-        prompt.append("用户问题：").append(query).append("\n");
-        prompt.append("请从以下候选片段中选出最相关的前")
-                .append(Math.min(finalTopK, candidates.size()))
-                .append("个，并按相关性从高到低排序。\n\n");
-
-        for (int i = 0; i < candidates.size(); i++) {
-            Document document = candidates.get(i);
-            prompt.append("候选").append(i + 1).append("：\n")
-                    .append("标题：").append(getMetadataString(document, "title", "未知文章")).append("\n")
-                    .append("标识：").append(getMetadataString(document, "sourceId", "未知标识")).append("\n")
-                    .append("片段：").append(truncateForModelRerank(document.getText())).append("\n\n");
-        }
-
-        prompt.append("只输出编号列表。");
-        return prompt.toString();
-    }
-
-    private String truncateForModelRerank(String text) {
-        if (text == null || text.isBlank()) {
-            return "";
-        }
-        String normalized = text.replaceAll("\\s+", " ").trim();
-        if (normalized.length() <= 220) {
-            return normalized;
-        }
-        return normalized.substring(0, 220) + "...";
-    }
-
-    private List<Document> applyModelRerankResult(List<Document> modelWindow,
-                                                  List<Document> ruleRanked,
-                                                  String rawOrder,
-                                                  int finalTopK) {
-        List<Integer> order = parseModelRerankOrder(rawOrder, modelWindow.size());
-        if (order.isEmpty()) {
-            return ruleRanked;
-        }
-
-        List<Document> ordered = new ArrayList<>();
-        Set<String> consumedKeys = new LinkedHashSet<>();
-        int scoreSeed = modelWindow.size();
-
-        for (Integer index : order) {
-            Document document = modelWindow.get(index);
-            ordered.add(document.mutate()
-                    .metadata("score", (double) scoreSeed--)
-                    .metadata("scoreLabel", "模型重排得分")
-                    .metadata("retrievalSource", "model-rerank")
-                    .build());
-            consumedKeys.add(buildDocumentKey(document));
-        }
-
-        for (Document document : modelWindow) {
-            String key = buildDocumentKey(document);
-            if (consumedKeys.add(key)) {
-                ordered.add(document);
-            }
-        }
-
-        for (int i = modelWindow.size(); i < ruleRanked.size(); i++) {
-            Document document = ruleRanked.get(i);
-            String key = buildDocumentKey(document);
-            if (consumedKeys.add(key)) {
-                ordered.add(document);
-            }
-        }
-
-        return ordered.stream().limit(finalTopK).collect(Collectors.toList());
-    }
-
-    private List<Integer> parseModelRerankOrder(String rawOrder, int candidateSize) {
-        if (rawOrder == null || rawOrder.isBlank()) {
-            return List.of();
-        }
-
-        Set<Integer> orderedIndexes = new LinkedHashSet<>();
-        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("\\d+").matcher(rawOrder);
-        while (matcher.find()) {
-            int oneBasedIndex = Integer.parseInt(matcher.group());
-            if (oneBasedIndex >= 1 && oneBasedIndex <= candidateSize) {
-                orderedIndexes.add(oneBasedIndex - 1);
-            }
-        }
-        return new ArrayList<>(orderedIndexes);
-    }
-
-    private double computeRerankScore(Document document, String normalizedQuery, List<String> keywords) {
-        String title = normalizeForMatch(getMetadataString(document, "title", ""));
-        String text = normalizeForMatch(document.getText());
-        double baseScore = getMetadataDouble(document, "score", 0.0d);
-        String retrievalSource = getMetadataString(document, "retrievalSource", "");
-
-        double score = baseScore * 4.0d;
-        if (!normalizedQuery.isBlank()) {
-            if (!title.isBlank() && title.contains(normalizedQuery)) {
-                score += 4.0d;
-            }
-            if (!text.isBlank() && text.contains(normalizedQuery)) {
-                score += 3.0d;
-            }
-        }
-
-        int matchedKeywords = 0;
-        int effectiveKeywords = 0;
-        for (String keyword : keywords) {
-            String normalizedKeyword = normalizeForMatch(keyword);
-            if (normalizedKeyword.isBlank() || normalizedKeyword.equals(normalizedQuery)) {
-                continue;
-            }
-            effectiveKeywords++;
-            if (!title.isBlank() && title.contains(normalizedKeyword)) {
-                matchedKeywords++;
-                score += 1.8d;
-                continue;
-            }
-            if (!text.isBlank() && text.contains(normalizedKeyword)) {
-                matchedKeywords++;
-                score += 1.1d;
-            }
-        }
-
-        if (effectiveKeywords > 0) {
-            score += ((double) matchedKeywords / effectiveKeywords) * 2.5d;
-        }
-        if ("hybrid".equals(retrievalSource)) {
-            score += 0.5d;
-        } else if ("keyword".equals(retrievalSource)) {
-            score += 0.2d;
-        }
-        return score;
-    }
-
     private ResponseConfidenceService.ResponseConfidence evaluateConfidence(List<Document> documents) {
         return responseConfidenceService.evaluateConfidence(documents, isConfidenceAwareEnabled());
     }
@@ -860,69 +602,8 @@ public class ChatServiceImpl implements ChatService {
         );
     }
 
-    private boolean isSimpleFactQuery(String normalizedQuery, List<String> keywords) {
-        if (normalizedQuery.isBlank()) {
-            return false;
-        }
-
-        int atomicKeywordCount = (int) keywords.stream()
-                .map(this::normalizeForMatch)
-                .filter(keyword -> !keyword.isBlank())
-                .filter(keyword -> !keyword.equals(normalizedQuery))
-                .count();
-        boolean shortQuery = normalizedQuery.length() <= 24;
-        boolean smallKeywordSet = atomicKeywordCount <= 3;
-        boolean hasFactCue = normalizedQuery.matches(".*(多少|几|谁|哪(个|位|一)|什么|何时|什么时候|多大|多久|默认端口|default|port|where|when|who|what).*");
-        boolean hasComplexCue = normalizedQuery.matches(".*(为什么|原理|流程|步骤|区别|对比|比较|优缺点|总结|分析|实现|怎么|如何).*");
-        return shortQuery && smallKeywordSet && hasFactCue && !hasComplexCue;
-    }
-
-    private boolean isComplexQuery(Session session, String normalizedQuery, List<String> keywords) {
-        if (normalizedQuery.isBlank()) {
-            return false;
-        }
-
-        boolean hasComplexCue = normalizedQuery.matches(".*(为什么|原理|流程|步骤|区别|对比|比较|优缺点|总结|分析|实现|怎么|如何|review|tradeoff|architecture).*");
-        boolean longQuery = normalizedQuery.length() >= 24;
-        boolean manyKeywords = keywords.size() >= 5;
-        boolean allArticlesSession = session != null && SessionType.isAllArticles(session.getSessionType());
-        return hasComplexCue || longQuery || manyKeywords || allArticlesSession;
-    }
-
-    private void accumulateHybridScores(List<Document> documents,
-                                        String source,
-                                        double weight,
-                                        Map<String, Document> documentByKey,
-                                        Map<String, Double> fusedScores,
-                                        Map<String, Set<String>> sourceByKey) {
-        for (int i = 0; i < documents.size(); i++) {
-            Document document = documents.get(i);
-            String key = buildDocumentKey(document);
-            documentByKey.putIfAbsent(key, document);
-            fusedScores.merge(key, weight / (HYBRID_RRF_K + i + 1), Double::sum);
-            sourceByKey.computeIfAbsent(key, ignored -> new LinkedHashSet<>()).add(source);
-        }
-    }
-
-    private String buildDocumentKey(Document document) {
-        return buildChunkKey(
-                getMetadataString(document, "sourceId", ""),
-                getMetadataInt(document, "chunkIndex", -1),
-                document.getText()
-        );
-    }
-
     private String buildChunkKey(String sourceId, int chunkIndex, String text) {
         return sourceId + "#" + chunkIndex + "#" + Objects.hashCode(text);
-    }
-
-    private String normalizeForMatch(String value) {
-        if (value == null) {
-            return "";
-        }
-        return value.toLowerCase(Locale.ROOT)
-                .replaceAll("\\s+", " ")
-                .trim();
     }
 
     private String getMetadataString(Document document, String key, String defaultValue) {
@@ -1056,18 +737,6 @@ public class ChatServiceImpl implements ChatService {
 
     private boolean isDynamicTopKEnabled() {
         return chatOptimizationProperties == null || !Boolean.FALSE.equals(chatOptimizationProperties.getDynamicTopKEnabled());
-    }
-
-    private boolean shouldUseLlmFallback(double decisionConfidence) {
-        return currentRoutingPolicy().shouldUseLlmFallback(decisionConfidence);
-    }
-
-    private boolean shouldUseHyde(String intentName, double ambiguityScore) {
-        return currentRoutingPolicy().shouldUseHyde(intentName, ambiguityScore);
-    }
-
-    private boolean shouldUseDecomposition(String intentName, double breadthScore) {
-        return currentRoutingPolicy().shouldUseDecomposition(intentName, breadthScore);
     }
 
     private ChatRoutingPolicy currentRoutingPolicy() {

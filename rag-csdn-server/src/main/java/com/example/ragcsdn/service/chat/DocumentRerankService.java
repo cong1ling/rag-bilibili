@@ -73,17 +73,7 @@ public class DocumentRerankService {
         List<Document> modelWindow = new ArrayList<>(ruleRanked.subList(0, modelWindowSize));
         try {
             String result = chatClientBuilder.build().prompt()
-                    .system("""
-                            你是RAG检索重排器。
-                            你的任务是根据用户问题，对候选片段按“最有助于回答问题”的顺序重排。
-                            评估标准：
-                            1. 与问题直接相关
-                            2. 能提供更完整、更精确的事实
-                            3. 来源信息明确
-                            4. 避免重复语义
-                            只输出候选编号，使用英文逗号分隔，例如：2,1,3
-                            不要输出解释，不要输出编号之外的内容。
-                            """)
+                    .system(DocumentRerankPromptTemplates.MODEL_RERANK_SYSTEM_PROMPT)
                     .user(buildModelRerankPrompt(query, modelWindow, finalTopK))
                     .call()
                     .content();
@@ -96,20 +86,24 @@ public class DocumentRerankService {
 
     String buildModelRerankPrompt(String query, List<Document> candidates, int finalTopK) {
         StringBuilder prompt = new StringBuilder();
-        prompt.append("用户问题：").append(query).append("\n");
-        prompt.append("请从以下候选片段中选出最相关的前")
+        prompt.append(DocumentRerankPromptTemplates.USER_QUERY_PREFIX).append(query).append("\n");
+        prompt.append(DocumentRerankPromptTemplates.TOP_K_PREFIX)
                 .append(Math.min(finalTopK, candidates.size()))
-                .append("个，并按相关性从高到低排序。\n\n");
+                .append(DocumentRerankPromptTemplates.TOP_K_SUFFIX)
+                .append("\n\n");
 
         for (int i = 0; i < candidates.size(); i++) {
             Document document = candidates.get(i);
-            prompt.append("候选").append(i + 1).append("：\n")
-                    .append("标题：").append(chatMetadataHelper.getMetadataString(document, "title", "未知文章")).append("\n")
-                    .append("标识：").append(chatMetadataHelper.getMetadataString(document, "sourceId", "未知标识")).append("\n")
-                    .append("片段：").append(truncateForModelRerank(document.getText())).append("\n\n");
+            prompt.append(DocumentRerankPromptTemplates.CANDIDATE_PREFIX).append(i + 1).append("：\n")
+                    .append(DocumentRerankPromptTemplates.TITLE_PREFIX)
+                    .append(chatMetadataHelper.getMetadataString(document, "title", "未知文章")).append("\n")
+                    .append(DocumentRerankPromptTemplates.SOURCE_PREFIX)
+                    .append(chatMetadataHelper.getMetadataString(document, "sourceId", "未知标识")).append("\n")
+                    .append(DocumentRerankPromptTemplates.SNIPPET_PREFIX)
+                    .append(truncateForModelRerank(document.getText())).append("\n\n");
         }
 
-        prompt.append("只输出编号列表。");
+        prompt.append(DocumentRerankPromptTemplates.ONLY_OUTPUT_ORDER);
         return prompt.toString();
     }
 

@@ -27,6 +27,20 @@ class DocumentRerankServiceTest {
         assertThat(reranked.get(0).getMetadata()).containsEntry("retrievalSource", "rerank");
     }
 
+    @Test
+    void buildModelRerankPrompt_shouldUseTemplateConstants() {
+        DocumentRerankService service = new DocumentRerankService(new ChatMetadataHelper(), new RetrievalPipelineService(new ChatMetadataHelper()));
+
+        String prompt = service.buildModelRerankPrompt(
+                "默认端口是多少",
+                List.of(doc("8080", "Spring Boot", "sid-1", 0, 1, 0.9d, ChatMetadataHelper.SCORE_LABEL_HYBRID)),
+                1
+        );
+
+        assertThat(prompt).contains(DocumentRerankPromptTemplates.USER_QUERY_PREFIX);
+        assertThat(prompt).contains(DocumentRerankPromptTemplates.ONLY_OUTPUT_ORDER);
+    }
+
     private Document doc(String text, String title, String sourceId, int chunkIndex,
                          int totalChunks, double score, String scoreLabel) {
         HashMap<String, Object> metadata = new HashMap<>();

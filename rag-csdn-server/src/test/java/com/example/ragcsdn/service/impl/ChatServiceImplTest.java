@@ -7,7 +7,6 @@ import com.example.ragcsdn.enums.MessageRole;
 import com.example.ragcsdn.enums.SessionType;
 import com.example.ragcsdn.service.chat.ChatMetadataHelper;
 import com.example.ragcsdn.service.chat.ChatPromptBuilder;
-import com.example.ragcsdn.service.chat.ChatRoutingPolicy;
 import com.example.ragcsdn.service.chat.ConversationMemoryService;
 import com.example.ragcsdn.service.chat.DocumentRerankService;
 import com.example.ragcsdn.service.chat.QueryUnderstandingService;
@@ -66,9 +65,6 @@ class ChatServiceImplTest {
     private Method mergeHybridResults;
     private Method rerankDocuments;
     private Method determineTopK;
-    private Method shouldUseLlmFallback;
-    private Method shouldUseHyde;
-    private Method shouldUseDecomposition;
 
     /**
      * 每个测试方法执行前初始化：
@@ -97,12 +93,6 @@ class ChatServiceImplTest {
                 "rerankDocuments", String.class, List.class, int.class);
         determineTopK = ChatServiceImpl.class.getDeclaredMethod(
                 "determineTopK", Session.class, String.class);
-        shouldUseLlmFallback = ChatServiceImpl.class.getDeclaredMethod(
-                "shouldUseLlmFallback", double.class);
-        shouldUseHyde = ChatServiceImpl.class.getDeclaredMethod(
-                "shouldUseHyde", String.class, double.class);
-        shouldUseDecomposition = ChatServiceImpl.class.getDeclaredMethod(
-                "shouldUseDecomposition", String.class, double.class);
         // setAccessible(true) 允许在类外部调用私有方法
         buildMessageHistory.setAccessible(true);
         buildContext.setAccessible(true);
@@ -115,9 +105,6 @@ class ChatServiceImplTest {
         mergeHybridResults.setAccessible(true);
         rerankDocuments.setAccessible(true);
         determineTopK.setAccessible(true);
-        shouldUseLlmFallback.setAccessible(true);
-        shouldUseHyde.setAccessible(true);
-        shouldUseDecomposition.setAccessible(true);
 
         ChatOptimizationProperties properties = defaultProperties();
         setField("chatOptimizationProperties", properties);
@@ -131,7 +118,6 @@ class ChatServiceImplTest {
         setField("chatMetadataHelper", metadataHelper);
         setField("retrievalPipelineService", retrievalPipelineService);
         setField("documentRerankService", new DocumentRerankService(metadataHelper, retrievalPipelineService));
-        setField("chatRoutingPolicy", new ChatRoutingPolicy(properties, new QueryComplexityAnalyzer(properties), retrievalPipelineService, metadataHelper));
     }
 
     /**
@@ -532,47 +518,6 @@ class ChatServiceImplTest {
         int topK = invokeDetermineTopK(null, "分析 Spring AI 检索链路的流程、取舍与优化方式");
 
         assertThat(topK).isEqualTo(8);
-    }
-
-    @Test
-    void ruleRouting_highConfidenceDirectQuery_skipsFallback() throws Exception {
-        ChatOptimizationProperties properties = defaultProperties();
-        properties.setRoutingObservationOnly(false);
-        setField("chatOptimizationProperties", properties);
-
-        boolean usedFallback = (boolean) shouldUseLlmFallback.invoke(chatService, 0.88d);
-
-        assertThat(usedFallback).isFalse();
-    }
-
-    @Test
-    void ruleRouting_lowConfidenceQuery_usesFallback() throws Exception {
-        ChatOptimizationProperties properties = defaultProperties();
-        properties.setRoutingObservationOnly(false);
-        setField("chatOptimizationProperties", properties);
-
-        boolean usedFallback = (boolean) shouldUseLlmFallback.invoke(chatService, 0.41d);
-
-        assertThat(usedFallback).isTrue();
-    }
-
-    @Test
-    void routeGuards_requireMatchingIntentAndThreshold() throws Exception {
-        ChatOptimizationProperties properties = defaultProperties();
-        properties.setRoutingObservationOnly(false);
-        properties.setHydeTriggerThreshold(0.72d);
-        properties.setDecompositionTriggerThreshold(0.68d);
-        setField("chatOptimizationProperties", properties);
-
-        boolean useHyde = (boolean) shouldUseHyde.invoke(chatService, "AMBIGUOUS", 0.80d);
-        boolean skipHyde = (boolean) shouldUseHyde.invoke(chatService, "DIRECT", 0.80d);
-        boolean useDecomposition = (boolean) shouldUseDecomposition.invoke(chatService, "BROAD", 0.78d);
-        boolean skipDecomposition = (boolean) shouldUseDecomposition.invoke(chatService, "DIRECT", 0.78d);
-
-        assertThat(useHyde).isTrue();
-        assertThat(skipHyde).isFalse();
-        assertThat(useDecomposition).isTrue();
-        assertThat(skipDecomposition).isFalse();
     }
 
     @Test
