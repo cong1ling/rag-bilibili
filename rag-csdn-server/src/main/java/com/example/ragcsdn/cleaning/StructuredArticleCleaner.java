@@ -31,6 +31,10 @@ public class StructuredArticleCleaner {
                 blocks.add(new CleaningBlock(CleaningBlockType.HEADING, element.text(), headingLevel(tag), NoiseLabel.NONE));
             } else if ("p".equals(tag)) {
                 blocks.add(classifyParagraph(element.text()));
+            } else if (tag.matches("ol|ul")) {
+                for (Element item : element.select("> li")) {
+                    blocks.add(new CleaningBlock(CleaningBlockType.LIST, item.text(), 0, NoiseLabel.NONE));
+                }
             } else if ("li".equals(tag)) {
                 blocks.add(new CleaningBlock(CleaningBlockType.LIST, element.text(), 0, NoiseLabel.NONE));
             } else if ("blockquote".equals(tag)) {

@@ -241,4 +241,43 @@ class CsdnDocumentReaderTest {
         assertTrue(documents.get(0).getText().contains("## 安装"));
         assertTrue(!documents.get(0).getText().contains("目录"));
     }
+
+    @Test
+    void shouldPreserveNestedOrderedListContentInArticleBody() {
+        CsdnResource resource = new CsdnResource("https://blog.csdn.net/test_author/article/details/147000001");
+        CsdnDocumentReader reader = new CsdnDocumentReader(resource);
+
+        String html = """
+                <html>
+                  <head>
+                    <meta property="og:title" content="题解测试"/>
+                  </head>
+                  <body>
+                    <main>
+                      <div id="content_views">
+                        <h2>解题思路</h2>
+                        <p>前置说明</p>
+                        <ol>
+                          <li>第一次观察重叠区间</li>
+                          <li>第二次计算有效新增时间</li>
+                          <li>第三次生成下一轮结果</li>
+                          <li>第四次处理收尾逻辑</li>
+                        </ol>
+                        <p>最终总结</p>
+                      </div>
+                    </main>
+                  </body>
+                </html>
+                """;
+
+        List<Document> documents = reader.parseDocuments(resource, html);
+        String text = documents.get(0).getText();
+
+        assertTrue(text.contains("前置说明"));
+        assertTrue(text.contains("第一次观察重叠区间"));
+        assertTrue(text.contains("第二次计算有效新增时间"));
+        assertTrue(text.contains("第三次生成下一轮结果"));
+        assertTrue(text.contains("第四次处理收尾逻辑"));
+        assertTrue(text.contains("最终总结"));
+    }
 }
